@@ -196,7 +196,8 @@ class VoiceRecognizer(private val context: Context) {
                     modelConfig = OfflineModelConfig(
                         senseVoice = OfflineSenseVoiceModelConfig(
                             model = File(dir, MODEL_FILE).absolutePath,
-                            language = "zh",
+                            // 交给模型自动判语种：写死 "zh" 时中英混说的英文词会被硬翻成中文
+                            language = "auto",
                             // 输出规范标点与阿拉伯数字
                             useInverseTextNormalization = true,
                         ),
