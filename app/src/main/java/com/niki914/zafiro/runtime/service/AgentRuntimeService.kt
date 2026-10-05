@@ -159,9 +159,38 @@ class AgentRuntimeService : Service() {
         wakeWordEngine = null
     }
 
-    /** 唤醒命中入口。P5 先只落日志，P6 在此触发 Agent。 */
+    /** 唤醒命中入口。P6：直接触发一轮 Agent；P7 会换成「录音 → ASR → 用识别文本触发」。 */
     private fun onWakeWord(keyword: String) {
         Logger.i(LOG_TAG, "Wake word fired: $keyword")
+        triggerTurnFromWake()
+    }
+
+    /**
+     * 用占位 query 触发一轮 Agent，证明唤醒回调能接到 runtime。
+     * 走的是与 IPC `submit` 相同的内核（updateDraft + stream + executeTurn），
+     * 区别只是 frame 收在一个本地 callback 里（P8 会在这里接 TTS 朗读）。
+     */
+    private fun triggerTurnFromWake() {
+        val callback = object : IRenderFrameCallback.Stub() {
+            override fun onFrame(frame: RenderFrame?) {
+                val f = frame ?: return
+                if (f.isFinal) {
+                    Logger.i(LOG_TAG, "wake turn final textLength=${f.text.length}")
+                }
+            }
+        }
+
+        agent.updateDraft { it.copy(text = WAKE_QUERY, images = emptyList(), files = emptyList()) }
+        when (agent.stream()) {
+            TurnStart.Started -> {
+                val job = scope.launch { executeTurn(callback) }
+                activeTurn.set(ActiveTurn(callback, job))
+                Logger.i(LOG_TAG, "wake turn started queryLength=${WAKE_QUERY.length}")
+            }
+
+            TurnStart.Busy -> Logger.w(LOG_TAG, "wake turn ignored: another turn in progress")
+            TurnStart.DraftEmpty -> Logger.w(LOG_TAG, "wake turn ignored: draft empty")
+        }
     }
 
     private val agent: Agent get() = requireService()
@@ -188,6 +217,11 @@ class AgentRuntimeService : Service() {
          * 当前值对应 "hey jimmy"，由模型自带 bpe.model 编码得到。
          */
         private const val WAKE_WORD = "▁HE Y ▁ J I M M Y"
+
+        /**
+         * 唤醒后提交的占位 query。P7 接入 ASR 后，这里会换成识别到的用户语音文本。
+         */
+        private const val WAKE_QUERY = "请回复 ok"
 
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
