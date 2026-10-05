@@ -105,12 +105,15 @@ class WakeWordEngine(
     fun stop() {
         if (!running && worker == null) return
         running = false
-        worker?.join(2000)
-        worker = null
-        audioRecord?.let {
-            runCatching { it.stop() }
-            it.release()
+        // 先停采集：AudioRecord.stop() 会打断阻塞中的 read()，worker 才能立刻退出循环。
+        // 反过来先 join 会白等满超时（实测 2s），麦克风迟迟不交给后续的语音识别。
+        audioRecord?.let { runCatching { it.stop() } }
+        // 唤醒回调本身就跑在 worker 线程上时，自 join 只会白等满超时。
+        if (worker !== Thread.currentThread()) {
+            worker?.join(2000)
         }
+        worker = null
+        audioRecord?.let { runCatching { it.release() } }
         audioRecord = null
         Logger.i(TAG, "Wake word engine stopped")
     }
