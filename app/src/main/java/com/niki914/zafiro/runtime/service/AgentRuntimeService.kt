@@ -53,6 +53,7 @@ import com.niki914.zafiro.api.model.ApprovalDecision
 import com.niki914.zafiro.app.notification.ResidentNotificationBuilder
 import com.niki914.zafiro.app.notification.ResidentNotificationManager
 import com.niki914.zafiro.business.notification.NotificationChannelManager
+import com.niki914.zafiro.voice.SpeechSpeaker
 import com.niki914.zafiro.voice.VoiceRecognizer
 import com.niki914.zafiro.voice.WakeWordEngine
 
@@ -66,6 +67,9 @@ class AgentRuntimeService : Service() {
 
     /** 当前「录音 → 识别 → 触发回合」的作业，避免唤醒叠加。 */
     private var voiceTurnJob: Job? = null
+
+    /** 回复朗读器：语音回合结束后把 Agent 的答复念出来。 */
+    private var speechSpeaker: SpeechSpeaker? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -141,6 +145,8 @@ class AgentRuntimeService : Service() {
         voiceTurnJob = null
         voiceRecognizer?.release()
         voiceRecognizer = null
+        speechSpeaker?.shutdown()
+        speechSpeaker = null
         statusJob?.cancel()
         activeTurn.getAndSet(null)?.job?.cancel()
         scope.cancel()
@@ -152,6 +158,7 @@ class AgentRuntimeService : Service() {
      * 启动常驻唤醒词监听。已在跑或无录音权限时静默跳过，
      * 权限申请由 UI 侧负责（service 不能弹运行时权限）。
      */
+    @Synchronized
     private fun startWakeWordListening() {
         if (wakeWordEngine != null) return
         val engine = WakeWordEngine(
@@ -175,8 +182,9 @@ class AgentRuntimeService : Service() {
         scope.launch(Dispatchers.IO) {
             try {
                 obtainVoiceRecognizer().warmUp()
+                obtainSpeechSpeaker()
             } catch (e: Exception) {
-                Logger.w(LOG_TAG, "ASR warm up failed: ${e.message}")
+                Logger.w(LOG_TAG, "voice warm up failed: ${e.message}")
             }
         }
     }
@@ -186,10 +194,35 @@ class AgentRuntimeService : Service() {
     private fun obtainVoiceRecognizer(): VoiceRecognizer =
         voiceRecognizer ?: VoiceRecognizer(applicationContext).also { voiceRecognizer = it }
 
+    @Synchronized
     private fun stopWakeWordListening() {
         wakeWordEngine?.stop()
         wakeWordEngine = null
     }
+
+    /**
+     * 朗读 Agent 的回复。朗读期间让出麦克风，免得把自己的声音当成唤醒词再触发一次；
+     * 念完（或失败）再把唤醒监听接回来。
+     */
+    private fun speakReply(text: String) {
+        if (text.isBlank()) {
+            Logger.w(LOG_TAG, "voice turn is empty, nothing to speak")
+            if (isResidentRequested) startWakeWordListening()
+            return
+        }
+        stopWakeWordListening()
+        obtainSpeechSpeaker().speak(text) {
+            if (isResidentRequested) startWakeWordListening()
+        }
+    }
+
+    /** 朗读器单例：引擎初始化是异步的，尽早建好。 */
+    @Synchronized
+    private fun obtainSpeechSpeaker(): SpeechSpeaker =
+        speechSpeaker ?: SpeechSpeaker(applicationContext).also {
+            it.initialize()
+            speechSpeaker = it
+        }
 
     /** 唤醒命中入口：让出麦克风 → 录一句 → ASR → 触发一轮 Agent。 */
     private fun onWakeWord(keyword: String) {
@@ -240,6 +273,7 @@ class AgentRuntimeService : Service() {
                 val f = frame ?: return
                 if (f.isFinal) {
                     Logger.i(LOG_TAG, "voice turn final textLength=${f.text.length}")
+                    speakReply(f.text)
                 }
             }
         }
