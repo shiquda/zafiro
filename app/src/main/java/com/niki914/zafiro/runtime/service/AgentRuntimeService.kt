@@ -314,7 +314,7 @@ class AgentRuntimeService : Service() {
          * 英文模型（gigaspeech）是 BPE 词表，`▁` 表示词首边界；
          * 当前值对应 "hey jimmy"，由模型自带 bpe.model 编码得到。
          */
-        private const val WAKE_WORD = "▁HE Y ▁ J I M M Y"
+        private const val WAKE_WORD = "▁HE Y ▁ J IM M Y"
 
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
