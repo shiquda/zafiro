@@ -43,6 +43,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicReference
 import com.niki914.zafiro.app.R as AppR
@@ -52,12 +53,19 @@ import com.niki914.zafiro.api.model.ApprovalDecision
 import com.niki914.zafiro.app.notification.ResidentNotificationBuilder
 import com.niki914.zafiro.app.notification.ResidentNotificationManager
 import com.niki914.zafiro.business.notification.NotificationChannelManager
+import com.niki914.zafiro.voice.VoiceRecognizer
 import com.niki914.zafiro.voice.WakeWordEngine
 
 class AgentRuntimeService : Service() {
 
     /** 唤醒词引擎：随「常驻」开关启停。 */
     private var wakeWordEngine: WakeWordEngine? = null
+
+    /** 语音识别引擎：首次唤醒时加载 SenseVoice 模型，之后常驻复用。 */
+    private var voiceRecognizer: VoiceRecognizer? = null
+
+    /** 当前「录音 → 识别 → 触发回合」的作业，避免唤醒叠加。 */
+    private var voiceTurnJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -129,6 +137,10 @@ class AgentRuntimeService : Service() {
         Logger.i(LOG_TAG, "onDestroy clients=$boundClientsCount resident=$isResidentRequested")
         instance = null
         stopWakeWordListening()
+        voiceTurnJob?.cancel()
+        voiceTurnJob = null
+        voiceRecognizer?.release()
+        voiceRecognizer = null
         statusJob?.cancel()
         activeTurn.getAndSet(null)?.job?.cancel()
         scope.cancel()
@@ -149,47 +161,99 @@ class AgentRuntimeService : Service() {
         )
         if (engine.start()) {
             wakeWordEngine = engine
+            warmUpVoiceRecognizer()
         } else {
             Logger.w(LOG_TAG, "Wake word engine failed to start, check RECORD_AUDIO permission")
         }
     }
+
+    /**
+     * 后台预加载 ASR 模型。SenseVoice int8 首次加载要 2-3s，
+     * 若等到唤醒后才开始加载，用户开头那句话会直接丢掉。
+     */
+    private fun warmUpVoiceRecognizer() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                obtainVoiceRecognizer().warmUp()
+            } catch (e: Exception) {
+                Logger.w(LOG_TAG, "ASR warm up failed: ${e.message}")
+            }
+        }
+    }
+
+    /** 语音识别引擎单例；模型加载较贵，只在进程内建一次。 */
+    @Synchronized
+    private fun obtainVoiceRecognizer(): VoiceRecognizer =
+        voiceRecognizer ?: VoiceRecognizer(applicationContext).also { voiceRecognizer = it }
 
     private fun stopWakeWordListening() {
         wakeWordEngine?.stop()
         wakeWordEngine = null
     }
 
-    /** 唤醒命中入口。P6：直接触发一轮 Agent；P7 会换成「录音 → ASR → 用识别文本触发」。 */
+    /** 唤醒命中入口：让出麦克风 → 录一句 → ASR → 触发一轮 Agent。 */
     private fun onWakeWord(keyword: String) {
         Logger.i(LOG_TAG, "Wake word fired: $keyword")
-        triggerTurnFromWake()
+        // 回调跑在唤醒引擎的采集线程上，切到 scope 再停引擎，避免自己 join 自己
+        scope.launch { captureVoiceTurn() }
     }
 
     /**
-     * 用占位 query 触发一轮 Agent，证明唤醒回调能接到 runtime。
-     * 走的是与 IPC `submit` 相同的内核（updateDraft + stream + executeTurn），
-     * 区别只是 frame 收在一个本地 callback 里（P8 会在这里接 TTS 朗读）。
+     * 唤醒后录一句话并识别，用识别文本触发一轮 Agent。
+     *
+     * 唤醒监听与识别不能同时占用麦克风，所以先停 KWS，识别结束（无论成败）再恢复。
      */
-    private fun triggerTurnFromWake() {
+    @Synchronized
+    private fun captureVoiceTurn() {
+        if (voiceTurnJob?.isActive == true) {
+            Logger.w(LOG_TAG, "voice turn already running, ignore wake")
+            return
+        }
+        stopWakeWordListening()
+
+        voiceTurnJob = scope.launch {
+            try {
+                val recognizer = obtainVoiceRecognizer()
+                val text = withContext(Dispatchers.IO) { recognizer.listenOnce() }
+                if (text.isNullOrBlank()) {
+                    Logger.w(LOG_TAG, "voice turn: nothing recognized")
+                } else {
+                    Logger.i(LOG_TAG, "voice turn recognized textLength=${text.length}")
+                    triggerTurnFromWake(text)
+                }
+            } catch (e: Exception) {
+                Logger.e(LOG_TAG, "voice turn failed: ${e.message}")
+            } finally {
+                if (isResidentRequested) startWakeWordListening()
+            }
+        }
+    }
+
+    /**
+     * 用 [query] 触发一轮 Agent。走的是与 IPC `submit` 相同的内核
+     * （updateDraft + stream + executeTurn），frame 收在本地 callback 里
+     * （P8 会在这里接 TTS 朗读）。
+     */
+    private fun triggerTurnFromWake(query: String) {
         val callback = object : IRenderFrameCallback.Stub() {
             override fun onFrame(frame: RenderFrame?) {
                 val f = frame ?: return
                 if (f.isFinal) {
-                    Logger.i(LOG_TAG, "wake turn final textLength=${f.text.length}")
+                    Logger.i(LOG_TAG, "voice turn final textLength=${f.text.length}")
                 }
             }
         }
 
-        agent.updateDraft { it.copy(text = WAKE_QUERY, images = emptyList(), files = emptyList()) }
+        agent.updateDraft { it.copy(text = query, images = emptyList(), files = emptyList()) }
         when (agent.stream()) {
             TurnStart.Started -> {
                 val job = scope.launch { executeTurn(callback) }
                 activeTurn.set(ActiveTurn(callback, job))
-                Logger.i(LOG_TAG, "wake turn started queryLength=${WAKE_QUERY.length}")
+                Logger.i(LOG_TAG, "voice turn started queryLength=${query.length}")
             }
 
-            TurnStart.Busy -> Logger.w(LOG_TAG, "wake turn ignored: another turn in progress")
-            TurnStart.DraftEmpty -> Logger.w(LOG_TAG, "wake turn ignored: draft empty")
+            TurnStart.Busy -> Logger.w(LOG_TAG, "voice turn ignored: another turn in progress")
+            TurnStart.DraftEmpty -> Logger.w(LOG_TAG, "voice turn ignored: draft empty")
         }
     }
 
@@ -217,11 +281,6 @@ class AgentRuntimeService : Service() {
          * 当前值对应 "hey jimmy"，由模型自带 bpe.model 编码得到。
          */
         private const val WAKE_WORD = "▁HE Y ▁ J I M M Y"
-
-        /**
-         * 唤醒后提交的占位 query。P7 接入 ASR 后，这里会换成识别到的用户语音文本。
-         */
-        private const val WAKE_QUERY = "请回复 ok"
 
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
