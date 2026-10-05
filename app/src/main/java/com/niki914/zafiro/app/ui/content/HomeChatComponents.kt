@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -428,6 +429,7 @@ fun LiquidChatComposer(
     pendingImages: List<HomeChatImage> = emptyList(),
     pendingFiles: List<HomeChatFile> = emptyList(),
     onAttachImageClick: () -> Unit = {},
+    onVoiceClick: () -> Unit = {},
 ) {
     val canSend = !isGenerating &&
             (value.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty())
@@ -468,6 +470,27 @@ fun LiquidChatComposer(
                     imageVector = Icons.Default.Add,
                     contentDescription = stringResource(
                         R.string.ui_home_add_image_content_description
+                    ),
+                )
+            }
+        }
+    }
+
+    @Composable
+    fun voiceButton() {
+        // 与唤醒词同一条链路：点一下等效于喊了一次 hey jimmy（提示音 → 录音 → ASR → 一轮）。
+        // 回合进行中不设 enabled=false（那会静默吞点击且无视觉差异），改在 onClick 里挡。
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) {
+            ActionBarButton(
+                onClick = { if (!isGenerating) onVoiceClick() },
+                // 贴近发送按钮：ActionBarButton 自带 12dp 内边距 ×2，右移吃掉中间那截空白，
+                // 图标之间留 ~16dp 呼吸位（命中区仍是各自 72dp，图标不重叠）
+                modifier = Modifier.offset(x = 32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = stringResource(
+                        R.string.ui_home_voice_input_content_description
                     ),
                 )
             }
@@ -518,11 +541,17 @@ fun LiquidChatComposer(
             expandedLayout = expanded,
             expandedActionsRow = {
                 attachButton()
+                voiceButton()
                 sendButton()
             },
             modifier = modifier.fillMaxWidth(),
             leadingContent = { attachButton() },
-            trailingContent = { sendButton() },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    voiceButton()
+                    sendButton()
+                }
+            },
         )
 }
 

@@ -34,6 +34,9 @@ class SpeechSpeaker(private val context: Context) {
 
         /** 无论如何都不断超过这个字数。 */
         private const val MAX_CHUNK = 120
+
+        /** 语速。1.0 是引擎默认，稍快一点听着不拖沓。 */
+        private const val SPEECH_RATE = 1.5f
     }
 
     private var tts: TextToSpeech? = null
@@ -61,6 +64,8 @@ class SpeechSpeaker(private val context: Context) {
             }
             val engine = tts ?: return@TextToSpeech
             val language = engine.setLanguage(Locale.CHINA)
+            // 必须等引擎就绪后再设，之后所有 speak 都按这个语速走
+            engine.setSpeechRate(SPEECH_RATE)
             if (language == TextToSpeech.LANG_MISSING_DATA ||
                 language == TextToSpeech.LANG_NOT_SUPPORTED
             ) {
@@ -77,7 +82,7 @@ class SpeechSpeaker(private val context: Context) {
                 override fun onError(utteranceId: String?, errorCode: Int) = onUtteranceFinished()
             })
             ready = true
-            Logger.i(TAG, "TTS ready, engine=${engine.defaultEngine}, language=$language")
+            Logger.i(TAG, "TTS ready, engine=${engine.defaultEngine}, language=$language, rate=$SPEECH_RATE")
         }
     }
 
@@ -198,9 +203,13 @@ class SpeechSpeaker(private val context: Context) {
         callback?.invoke()
     }
 
-    /** 去掉 markdown 标记，避免 TTS 把 `**`、`` ` `` 之类念出来。 */
+    /**
+     * 去掉 markdown 标记与列表符号,避免 TTS 把 `**`、反引号念出来,
+     * 或把 `•` 念成「点」。数字、单位、百分号留给引擎处理。
+     */
     private fun cleanForSpeech(text: String): String = text
         .replace(Regex("\\[([^\\]]*)]\\([^)]*\\)"), "$1")
         .replace(Regex("`+"), "")
         .replace(Regex("[*_#>~|]"), "")
+        .replace(Regex("[•·▪◦]"), " ")
 }

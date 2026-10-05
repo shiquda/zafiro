@@ -107,6 +107,11 @@ class AgentRuntimeService : Service() {
                 Logger.i(LOG_TAG, "Resident notification: Decline clicked")
                 ResidentNotificationManager.resolveApproval(ApprovalDecision.Deny)
             }
+            ACTION_VOICE_INPUT -> {
+                Logger.i(LOG_TAG, "ACTION_VOICE_INPUT -> voice capture from UI")
+                // 与唤醒命中同一条链路：切到 scope 再停 KWS，避免自己 join 自己
+                scope.launch { captureVoiceTurn() }
+            }
             ACTION_START_RESIDENT -> {
                 isResidentRequested = true
                 updateResidentNotification()
@@ -362,6 +367,9 @@ class AgentRuntimeService : Service() {
 
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
+
+        /** 对话页语音按钮：等效于喊一次唤醒词，直接走「提示音 → 录音 → ASR → 一轮 Agent」。 */
+        const val ACTION_VOICE_INPUT = "com.niki914.zafiro.action.VOICE_INPUT"
         private const val MAX_QUERY_LENGTH = 8192
         private const val STORE_CHANNEL_ID = "nexus_xservice_default_channel"
         private const val STORE_CHANNEL_NAME = "Zafiro"

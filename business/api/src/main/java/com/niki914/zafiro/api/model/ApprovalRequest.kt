@@ -25,9 +25,4 @@ sealed interface ApprovalRequest {
         /** 命中的执行规则名。消费方：前台对话框、弹窗副标题。 */
         val ruleName: String,
     ) : ApprovalRequest
-
-    /**
-     * 屏幕控制知情同意（调用需要无障碍或悬浮窗能力的工具前置知情门）。
-     */
-    data object ScreenControlConsent : ApprovalRequest
 }

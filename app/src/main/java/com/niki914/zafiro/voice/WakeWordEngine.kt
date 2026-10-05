@@ -44,15 +44,15 @@ class WakeWordEngine(
         private const val READ_INTERVAL_SEC = 0.1
 
         /**
-         * 关键词路径的加分，sherpa Kotlin 默认 1.5。调高让关键词路径更占优。
+         * 关键词路径的加分，sherpa Kotlin 默认 1.5。
          */
-        private const val KEYWORDS_SCORE = 2.0f
+        private const val KEYWORDS_SCORE = 3.0f
 
         /**
-         * 命中门槛，sherpa Kotlin 默认 0.25。真人实测「正常音量、一臂距离」时偏难触发，
-         * 调到 0.12；代价是嘈杂环境下更容易误报。
+         * 命中门槛，sherpa Kotlin 默认 0.25。真人实测「正常音量、一臂距离」连喊多次
+         * 命中率偏低，连续下调（0.25 → 0.12 → 0.06）；代价是嘈杂环境更容易误报。
          */
-        private const val KEYWORDS_THRESHOLD = 0.12f
+        private const val KEYWORDS_THRESHOLD = 0.06f
     }
 
     private var audioRecord: AudioRecord? = null

@@ -13,9 +13,6 @@ import android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK
 import android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
 import android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
 import android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT
-import com.niki914.zafiro.api.AgentControl
-import com.niki914.zafiro.api.model.ApprovalDecision
-import com.niki914.zafiro.api.model.ApprovalRequest
 import com.niki914.zafiro.business.permission.Permission
 import com.niki914.zafiro.business.permission.PermissionManager
 import com.niki914.zafiro.business.permission.PermissionResult
@@ -188,31 +185,15 @@ object AccessibilityController {
     /**
      * Ensures the accessibility service is connected.
      *
-     * 知情门（链外）：无障碍与悬浮窗缺一不可，任一未授权即先要同意；拒绝不记忆。
-     * 逐个确保：申请前活查 status()，已授权直接跳过，缺失才跑各自默认链
+     * 无障碍与悬浮窗缺一不可，缺什么就地走各自默认链
      * （ROOT_SHELL → SHIZUKU → JUMP_SETTINGS），跑完复查一次。
      */
     suspend fun ensureService(): Result<Unit> {
         if (serviceInstance != null) return Result.success(Unit)
 
-        // 知情门（链外，引擎保持尽力尝试）：无障碍与悬浮窗缺一不可，任一未授权即先要同意。
-        // 后台弹不了窗 → 直接拒绝；拒绝不记忆，下次申请会再弹。
-        val needsAccess = permissions.status(Permission.ACCESSIBILITY) != PermissionState.GRANTED
-        val needsOverlay = permissions.status(Permission.OVERLAY) != PermissionState.GRANTED
-        if (needsAccess || needsOverlay) {
-            val agentControl = runCatching { requireService<AgentControl>() }.getOrNull()
-            val decision = agentControl?.decideApproval(ApprovalRequest.ScreenControlConsent)
-                ?: ApprovalDecision.Deny
-            if (decision != ApprovalDecision.Allow) {
-                return Result.failure(
-                    RuntimeException(
-                        "User declined screen-control consent (accessibility + overlay). " +
-                                "Tell the user these permissions are required for screen control; " +
-                                "they can retry or grant them manually in Settings."
-                    )
-                )
-            }
-        }
+        // 屏幕控制所需的「无障碍 + 悬浮窗」在自用设备上按常备能力处理：直接放行，
+        // 不再每次操作都弹「屏幕控制权限申请」确认框。缺什么由下面的默认链自己申请
+        // （ROOT_SHELL → SHIZUKU → JUMP_SETTINGS），真拿不到才把原因报给 LLM。
 
         // 逐个确保：已授权跳过，缺失才跑链。用户最多进出设置两次，已知代价。
         val failures = ArrayList<String>(2)

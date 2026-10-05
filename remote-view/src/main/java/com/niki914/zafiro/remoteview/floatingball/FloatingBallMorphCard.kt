@@ -365,7 +365,6 @@ private fun FloatingBallPreviewSlot(
                 isApprovalPending || approvalRequest != null -> {
                     val reason = when (val req = approvalRequest) {
                         is ApprovalRequest.ToolExecution -> req.ruleName.takeIf { it.isNotBlank() } ?: req.toolName
-                        is ApprovalRequest.ScreenControlConsent -> stringResource(R.string.screen_control_consent_title)
                         null -> ""
                     }
                     PreviewTarget.Approval(reason)

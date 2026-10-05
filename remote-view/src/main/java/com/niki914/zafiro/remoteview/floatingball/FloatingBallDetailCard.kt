@@ -323,38 +323,6 @@ fun FloatingBallDetailCardContent(
                     onDeny = onDeny,
                 )
             }
-
-            is ApprovalRequest.ScreenControlConsent -> {
-                // 标题 20sp 居中
-                Text(
-                    text = stringResource(R.string.screen_control_consent_title),
-                    color = colors.onSurface,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // 说明文本
-                Text(
-                    text = stringResource(R.string.screen_control_consent_body),
-                    color = colors.onSurfaceVariant,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                ApprovalActionButtons(
-                    allowText = stringResource(R.string.screen_control_consent_agree),
-                    denyText = stringResource(R.string.tool_permission_deny),
-                    onAllow = onAllow,
-                    onDeny = onDeny,
-                )
-            }
         }
     }
 }

@@ -138,17 +138,6 @@ class ResidentNotificationBuilderTest {
     }
 
     @Test
-    fun resolveBody_screenControlConsentUsesTitle() {
-        assertEquals(
-            context.getString(R.string.screen_control_consent_title),
-            ResidentNotificationBuilder.resolveBody(
-                AgentState.WaitingApproval(ApprovalRequest.ScreenControlConsent),
-                context,
-            ),
-        )
-    }
-
-    @Test
     fun resolveBody_toolRunningUsesRunningTextFromFloatingBall() {
         assertEquals(
             context.getString(

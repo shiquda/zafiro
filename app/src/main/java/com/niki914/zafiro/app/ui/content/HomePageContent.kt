@@ -127,6 +127,7 @@ import com.niki914.zafiro.api.model.ApprovalDecision
 import com.niki914.zafiro.api.model.ApprovalRequest
 import com.niki914.zafiro.repo.UpdateCheckHolder
 import com.niki914.zafiro.repo.XRepo
+import com.niki914.zafiro.runtime.service.AgentRuntimeService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -431,60 +432,8 @@ fun HomePageContent(
                 onDeny = { viewModel.sendIntent(HomeChatIntent.ResolveApproval(ApprovalDecision.Deny)) },
             )
         }
-        is ApprovalRequest.ScreenControlConsent -> {
-            ScreenControlConsentDialog(
-                onAgree = { viewModel.sendIntent(HomeChatIntent.ResolveApproval(ApprovalDecision.Allow)) },
-                onDeny = { viewModel.sendIntent(HomeChatIntent.ResolveApproval(ApprovalDecision.Deny)) },
-            )
-        }
         null -> {}
     }
-}
-
-/**
- * 屏幕控制知情同意对话框（无障碍 + 悬浮窗）。
- */
-@Composable
-private fun ScreenControlConsentDialog(
-    onAgree: () -> Unit,
-    onDeny: () -> Unit,
-) {
-    LiquidDialog(
-        visible = true,
-        onDismissRequest = onDeny,
-        dismissOnBackgroundTap = false,
-        title = {
-            Text(
-                text = stringResource(R.string.screen_control_consent_title),
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        text = {
-            Text(
-                text = stringResource(R.string.screen_control_consent_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        },
-        actions = {
-            MaterialTintLiquidButton(
-                text = stringResource(R.string.screen_control_consent_deny),
-                onClick = onDeny,
-                modifier = Modifier.weight(1f),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-            )
-            MaterialTintLiquidButton(
-                text = stringResource(R.string.screen_control_consent_agree),
-                onClick = onAgree,
-                modifier = Modifier.weight(1f),
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-            )
-        },
-    )
 }
 
 /**
@@ -756,6 +705,13 @@ private fun HomePageContentBody(
             pendingImages = pendingImages,
             pendingFiles = pendingFiles,
             onAttachImageClick = { attachSheetVisible = true },
+            onVoiceClick = {
+                context.startService(
+                    Intent(context, AgentRuntimeService::class.java).apply {
+                        action = AgentRuntimeService.ACTION_VOICE_INPUT
+                    }
+                )
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .onFocusChanged { focusState ->

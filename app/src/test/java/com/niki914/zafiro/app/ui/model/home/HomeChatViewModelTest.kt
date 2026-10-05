@@ -266,9 +266,10 @@ class HomeChatViewModelTest {
         val fixture = fixture()
         val approver = requireNotNull(fixture.agent.registeredApprover)
 
-        val decision = async { approver.decide(ApprovalRequest.ScreenControlConsent) }
+        val request = ApprovalRequest.ToolExecution("terminal", "rm -rf /tmp", "dangerous_rm")
+        val decision = async { approver.decide(request) }
         advanceUntilIdle()
-        assertEquals(ApprovalRequest.ScreenControlConsent, fixture.vm.uiStateFlow.value.pendingApproval)
+        assertEquals(request, fixture.vm.uiStateFlow.value.pendingApproval)
 
         decision.cancel()
         advanceUntilIdle()
