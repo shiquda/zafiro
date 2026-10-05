@@ -35,8 +35,8 @@ class SpeechSpeaker(private val context: Context) {
         /** 无论如何都不断超过这个字数。 */
         private const val MAX_CHUNK = 120
 
-        /** 语速。1.0 是引擎默认，稍快一点听着不拖沓。 */
-        private const val SPEECH_RATE = 1.5f
+        /** 语速。1.0 是引擎默认，1.4 比默认快一档、又不到赶的程度。 */
+        private const val SPEECH_RATE = 1.4f
     }
 
     private var tts: TextToSpeech? = null
