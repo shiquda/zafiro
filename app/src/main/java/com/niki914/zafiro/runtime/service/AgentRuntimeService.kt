@@ -42,6 +42,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
@@ -55,6 +56,7 @@ import com.niki914.zafiro.app.notification.ResidentNotificationManager
 import com.niki914.zafiro.business.notification.NotificationChannelManager
 import com.niki914.zafiro.voice.SpeechSpeaker
 import com.niki914.zafiro.voice.VoiceRecognizer
+import com.niki914.zafiro.voice.WakeTonePlayer
 import com.niki914.zafiro.voice.WakeWordEngine
 
 class AgentRuntimeService : Service() {
@@ -70,6 +72,9 @@ class AgentRuntimeService : Service() {
 
     /** 回复朗读器：语音回合结束后把 Agent 的答复念出来。 */
     private var speechSpeaker: SpeechSpeaker? = null
+
+    /** 唤醒提示音：命中后立刻给用户一个「听到了」的反馈。 */
+    private var wakeTonePlayer: WakeTonePlayer? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -147,6 +152,8 @@ class AgentRuntimeService : Service() {
         voiceRecognizer = null
         speechSpeaker?.shutdown()
         speechSpeaker = null
+        wakeTonePlayer?.release()
+        wakeTonePlayer = null
         statusJob?.cancel()
         activeTurn.getAndSet(null)?.job?.cancel()
         scope.cancel()
@@ -224,6 +231,11 @@ class AgentRuntimeService : Service() {
             speechSpeaker = it
         }
 
+    /** 提示音播放器单例。 */
+    @Synchronized
+    private fun obtainWakeTonePlayer(): WakeTonePlayer =
+        wakeTonePlayer ?: WakeTonePlayer(applicationContext).also { wakeTonePlayer = it }
+
     /** 唤醒命中入口：让出麦克风 → 录一句 → ASR → 触发一轮 Agent。 */
     private fun onWakeWord(keyword: String) {
         Logger.i(LOG_TAG, "Wake word fired: $keyword")
@@ -246,6 +258,9 @@ class AgentRuntimeService : Service() {
 
         voiceTurnJob = scope.launch {
             try {
+                // 先给反馈再开录：用户听到提示音才知道该说话了
+                obtainWakeTonePlayer().play()
+                delay(TONE_SETTLE_MS)
                 val recognizer = obtainVoiceRecognizer()
                 val text = withContext(Dispatchers.IO) { recognizer.listenOnce() }
                 if (text.isNullOrBlank()) {
@@ -315,6 +330,12 @@ class AgentRuntimeService : Service() {
          * 当前值对应 "hey jimmy"，由模型自带 bpe.model 编码得到。
          */
         private const val WAKE_WORD = "▁HE Y ▁ J IM M Y"
+
+        /**
+         * 提示音播完到开始录音之间的等待。提示音若被识别引擎拾取，
+         * 会变成一个莫名其妙的 query，所以留一点静默间隔。
+         */
+        private const val TONE_SETTLE_MS = 400L
 
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
