@@ -8,7 +8,7 @@ package com.niki914.okia.message
  * Design source: pi packages/ai types.ts ThinkingLevel；Eta Reasoning.kt。
  */
 enum class ThinkingLevel(val wireValue: String) {
-    OFF("none"),
+    OFF("off"),
     MINIMAL("minimal"),
     LOW("low"),
     MEDIUM("medium"),
@@ -28,7 +28,7 @@ enum class ThinkingLevel(val wireValue: String) {
             val normalized = value?.trim()?.lowercase().orEmpty()
             if (normalized.isEmpty()) return Default
             return entries.firstOrNull { it.wireValue == normalized } ?: when (normalized) {
-                "off", "disabled" -> OFF
+                "none", "off", "disabled" -> OFF
                 "x-high", "extra_high", "extra-high" -> XHIGH
                 else -> Default
             }

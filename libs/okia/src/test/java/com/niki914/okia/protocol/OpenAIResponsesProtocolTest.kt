@@ -890,12 +890,12 @@ class OpenAIResponsesProtocolTest {
     }
 
     @Test
-    fun thinkingLevelOffSentAsNone() = runBlocking {
+    fun thinkingLevelOffSentAsOff() = runBlocking {
         val request = protocol.buildRequest(
             snapshot().copy(thinkingLevel = ThinkingLevel.OFF),
             emptyList()
         )
         val reasoning = body(request)["reasoning"]!!.jsonObject
-        assertEquals("none", reasoning["effort"]!!.jsonPrimitive.content)
+        assertEquals("off", reasoning["effort"]!!.jsonPrimitive.content)
     }
 }

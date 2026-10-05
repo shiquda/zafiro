@@ -161,7 +161,7 @@ class OpenAIChatCompletionProtocol(
             )
             put("temperature", snapshot.temperature)
             // 思考强度：非 null 时发送 reasoning_effort（恒等映射，wire 值即 level 值）。
-            // OFF = 显式关闭（"none"，对齐 pi/Eta）；null = 不发字段（Provider 默认行为）。
+            // OFF = 显式关闭（"off"，网关白名单 off/low/medium/high/xhigh/max）；null = 不发字段（Provider 默认行为）。
             snapshot.thinkingLevel?.let {
                 put("reasoning_effort", it.wireValue)
             }

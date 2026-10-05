@@ -885,11 +885,11 @@ class OpenAIChatCompletionProtocolTest {
     }
 
     @Test
-    fun thinkingLevelOffSentAsNone() = runBlocking {
+    fun thinkingLevelOffSentAsOff() = runBlocking {
         val request = protocol.buildRequest(
             snapshot().copy(thinkingLevel = ThinkingLevel.OFF),
             emptyList()
         )
-        assertEquals("none", body(request)["reasoning_effort"]!!.jsonPrimitive.content)
+        assertEquals("off", body(request)["reasoning_effort"]!!.jsonPrimitive.content)
     }
 }

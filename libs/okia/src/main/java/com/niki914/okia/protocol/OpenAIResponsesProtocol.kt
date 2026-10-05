@@ -171,7 +171,7 @@ class OpenAIResponsesProtocol(
             put("max_output_tokens", snapshot.maxTokens)
             put("temperature", snapshot.temperature)
             // 思考强度：Responses API 的 reasoning 对象（对齐 pi openai-responses.ts：
-            // effort + summary=auto）。OFF = "none"；null = 不发字段（Provider 默认行为）。
+            // effort + summary=auto）。OFF = "off"；null = 不发字段（Provider 默认行为）。
             snapshot.thinkingLevel?.let {
                 put("reasoning", buildJsonObject {
                     put("effort", it.wireValue)
