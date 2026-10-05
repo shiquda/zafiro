@@ -95,6 +95,9 @@ dependencies {
     implementation(project(":libs:okia"))
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // sherpa-onnx：唤醒词（KWS）与语音识别（ASR）推理
+    implementation("com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8")
+
     // Room
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.room:room-ktx:2.7.2")

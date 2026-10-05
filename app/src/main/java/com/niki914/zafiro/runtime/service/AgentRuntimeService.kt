@@ -52,8 +52,12 @@ import com.niki914.zafiro.api.model.ApprovalDecision
 import com.niki914.zafiro.app.notification.ResidentNotificationBuilder
 import com.niki914.zafiro.app.notification.ResidentNotificationManager
 import com.niki914.zafiro.business.notification.NotificationChannelManager
+import com.niki914.zafiro.voice.WakeWordEngine
 
 class AgentRuntimeService : Service() {
+
+    /** 唤醒词引擎：随「常驻」开关启停。 */
+    private var wakeWordEngine: WakeWordEngine? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -84,12 +88,17 @@ class AgentRuntimeService : Service() {
             ACTION_START_RESIDENT -> {
                 isResidentRequested = true
                 updateResidentNotification()
+                startWakeWordListening()
             }
             ACTION_STOP_RESIDENT -> {
                 isResidentRequested = false
+                stopWakeWordListening()
                 if (boundClientsCount == 0 && activeTurn.get() == null) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    // 不能在这里无条件 stopForeground：若紧接着又收到 START（开关快速切回开），
+                    // 前台状态已被撤掉，服务会被 AM 当作闲置服务回收（am_stop_idle_service）。
+                    // 用 startId 版本的 stopSelf —— 只有没有更新的 start 时才真正停。
+                    Logger.i(LOG_TAG, "ACTION_STOP_RESIDENT -> stopSelf(startId=$startId)")
+                    stopSelf(startId)
                 }
             }
         }
@@ -104,20 +113,55 @@ class AgentRuntimeService : Service() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         boundClientsCount = (boundClientsCount - 1).coerceAtLeast(0)
+        Logger.i(
+            LOG_TAG,
+            "onUnbind clients=$boundClientsCount resident=$isResidentRequested turn=${activeTurn.get() != null}",
+        )
         if (boundClientsCount == 0 && !isResidentRequested && activeTurn.get() == null) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            Logger.i(LOG_TAG, "onUnbind -> stopSelf (no clients, not resident)")
+            // 同理：不用 stopForeground 抢先撤前台状态，交给 stopSelf 收尾。
             stopSelf()
         }
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        Logger.i(LOG_TAG, "onDestroy clients=$boundClientsCount resident=$isResidentRequested")
         instance = null
+        stopWakeWordListening()
         statusJob?.cancel()
         activeTurn.getAndSet(null)?.job?.cancel()
         scope.cancel()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
+    }
+
+    /**
+     * 启动常驻唤醒词监听。已在跑或无录音权限时静默跳过，
+     * 权限申请由 UI 侧负责（service 不能弹运行时权限）。
+     */
+    private fun startWakeWordListening() {
+        if (wakeWordEngine != null) return
+        val engine = WakeWordEngine(
+            context = applicationContext,
+            keywords = WAKE_WORD,
+            onKeyword = ::onWakeWord,
+        )
+        if (engine.start()) {
+            wakeWordEngine = engine
+        } else {
+            Logger.w(LOG_TAG, "Wake word engine failed to start, check RECORD_AUDIO permission")
+        }
+    }
+
+    private fun stopWakeWordListening() {
+        wakeWordEngine?.stop()
+        wakeWordEngine = null
+    }
+
+    /** 唤醒命中入口。P5 先只落日志，P6 在此触发 Agent。 */
+    private fun onWakeWord(keyword: String) {
+        Logger.i(LOG_TAG, "Wake word fired: $keyword")
     }
 
     private val agent: Agent get() = requireService()
@@ -137,6 +181,14 @@ class AgentRuntimeService : Service() {
 
     companion object {
         private const val LOG_TAG = "niki914_zafiro_AgentRuntimeService"
+
+        /**
+         * KWS 关键词，格式为「模型词表里的 token 序列 + `@原文`」，多个词用 `/` 分隔。
+         * 英文模型（gigaspeech）是 BPE 词表，`▁` 表示词首边界；
+         * 当前值对应 "hey jimmy"，由模型自带 bpe.model 编码得到。
+         */
+        private const val WAKE_WORD = "▁HE Y ▁ J I M M Y"
+
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
         private const val MAX_QUERY_LENGTH = 8192
