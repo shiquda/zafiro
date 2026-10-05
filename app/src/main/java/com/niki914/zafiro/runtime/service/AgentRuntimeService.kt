@@ -51,6 +51,7 @@ import com.niki914.zafiro.app.R as AppR
 
 import com.niki914.zafiro.api.AgentControl
 import com.niki914.zafiro.api.model.ApprovalDecision
+import com.niki914.zafiro.api.model.TurnBlock
 import com.niki914.zafiro.app.notification.ResidentNotificationBuilder
 import com.niki914.zafiro.app.notification.ResidentNotificationManager
 import com.niki914.zafiro.business.notification.NotificationChannelManager
@@ -75,6 +76,10 @@ class AgentRuntimeService : Service() {
 
     /** 唤醒提示音：命中后立刻给用户一个「听到了」的反馈。 */
     private var wakeTonePlayer: WakeTonePlayer? = null
+
+    /** 语音回合的朗读是否已开始（用于只让出一次麦克风）。 */
+    @Volatile
+    private var replyStreamStarted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -208,19 +213,37 @@ class AgentRuntimeService : Service() {
     }
 
     /**
-     * 朗读 Agent 的回复。朗读期间让出麦克风，免得把自己的声音当成唤醒词再触发一次；
-     * 念完（或失败）再把唤醒监听接回来。
+     * 把当前回合的正文增量喂给朗读器：正文长出一句就播一句，
+     * 而不是等整个回合结束再统一朗读（工具调用之间的文字也就不会攒到最后）。
+     *
+     * 朗读期间让出麦克风，全部念完再接回唤醒监听。
      */
-    private fun speakReply(text: String) {
-        if (text.isBlank()) {
-            Logger.w(LOG_TAG, "voice turn is empty, nothing to speak")
-            if (isResidentRequested) startWakeWordListening()
-            return
+    private fun feedReplyText(isFinal: Boolean) {
+        val speaker = obtainSpeechSpeaker()
+        if (!replyStreamStarted) {
+            replyStreamStarted = true
+            stopWakeWordListening()
+            speaker.beginReply()
         }
-        stopWakeWordListening()
-        obtainSpeechSpeaker().speak(text) {
+        speaker.feedReply(currentReplyBody(), isFinal) {
+            replyStreamStarted = false
             if (isResidentRequested) startWakeWordListening()
         }
+    }
+
+    /** 当前回合的正文：只取 Text 块，跳过思考与工具状态标记。 */
+    private fun currentReplyBody(): String {
+        val turn = agent.conversation.value.turns.lastOrNull() ?: return ""
+        val text = turn.blocks
+            .filterIsInstance<TurnBlock.Text>()
+            .joinToString("\n") { it.text }
+            .trim()
+        if (text.isNotEmpty()) return text
+        // 回合失败时正文是空的，这时至少把错误念出来
+        return turn.blocks
+            .filterIsInstance<TurnBlock.Failure>()
+            .firstNotNullOfOrNull { it.message?.trim()?.takeIf(String::isNotEmpty) }
+            .orEmpty()
     }
 
     /** 朗读器单例：引擎初始化是异步的，尽早建好。 */
@@ -288,8 +311,8 @@ class AgentRuntimeService : Service() {
                 val f = frame ?: return
                 if (f.isFinal) {
                     Logger.i(LOG_TAG, "voice turn final textLength=${f.text.length}")
-                    speakReply(f.text)
                 }
+                feedReplyText(f.isFinal)
             }
         }
 

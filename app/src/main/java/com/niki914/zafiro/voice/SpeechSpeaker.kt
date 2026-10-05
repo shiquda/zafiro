@@ -7,21 +7,48 @@ import com.niki914.logging.Logger
 import java.util.Locale
 
 /**
- * 用系统 TTS 朗读 Agent 的回复。
+ * 把 Agent 的回复流式念出来：正文每长出一句就排队合成，而不是等整个回合结束再统一朗读。
  *
- * 走系统默认引擎（本机指向 sherpa-onnx 中文引擎），所以这里只管喂文本，
- * 不直接依赖具体引擎。
+ * 调用方在回合开始时 [beginReply]，然后每次正文有变化就 [feedReply]；
+ * 文本流结束时传 `isFinal = true`，全部念完（或失败）后回调一次。
+ *
+ * 走系统 TTS（本机默认引擎是 sherpa-onnx 中文引擎）。
  */
 class SpeechSpeaker(private val context: Context) {
 
     companion object {
         private const val TAG = "ZafiroSpeaker"
-        private const val UTTERANCE_ID = "zafiro-reply"
+        private const val UTTERANCE_PREFIX = "zafiro-reply-"
+
+        /** 句末标点：一到就切，保证「说一句、播一句」的低延迟。 */
+        private const val HARD_BREAKS = "。！？!?；;"
+
+        /** 软切点：只在已经攒够字数时才切。换行/逗号一到就切会把句子打得很碎，反而卡顿。 */
+        private const val SOFT_BREAKS = "，,\n"
+
+        /** 少于这个字数不切，避免「好。」这类碎句单独占一次合成。 */
+        private const val MIN_CHUNK = 8
+
+        /** 攒到这个字数后，允许在软切点断句。 */
+        private const val SOFT_CHUNK = 60
+
+        /** 无论如何都不断超过这个字数。 */
+        private const val MAX_CHUNK = 120
     }
 
     private var tts: TextToSpeech? = null
     private var ready = false
-    private var onFinished: (() -> Unit)? = null
+
+    /** 已经喂进来的正文（累积快照），用来算增量。 */
+    private var lastBody = ""
+
+    /** 尚未切出去的正文尾巴。 */
+    private val pending = StringBuilder()
+
+    private var sequence = 0
+    private var queueCount = 0
+    private var streamClosed = false
+    private var onAllDone: (() -> Unit)? = null
 
     /** 异步初始化引擎。可重复调用。 */
     @Synchronized
@@ -42,32 +69,57 @@ class SpeechSpeaker(private val context: Context) {
             engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
 
-                override fun onDone(utteranceId: String?) = notifyFinished()
+                override fun onDone(utteranceId: String?) = onUtteranceFinished()
 
                 @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) = notifyFinished()
+                override fun onError(utteranceId: String?) = onUtteranceFinished()
 
-                override fun onError(utteranceId: String?, errorCode: Int) = notifyFinished()
+                override fun onError(utteranceId: String?, errorCode: Int) = onUtteranceFinished()
             })
             ready = true
             Logger.i(TAG, "TTS ready, engine=${engine.defaultEngine}, language=$language")
         }
     }
 
+    /** 开始一轮回复朗读：清掉上一轮残留的正文与队列状态。 */
+    @Synchronized
+    fun beginReply() {
+        lastBody = ""
+        pending.setLength(0)
+        streamClosed = false
+        onAllDone = null
+        Logger.i(TAG, "reply stream begin, queue=$queueCount")
+    }
+
     /**
-     * 朗读 [text]，播完（或失败）后回调 [onDone]。
-     * 引擎不可用时直接回调，保证调用方的状态机能继续走。
+     * 喂入当前完整正文（累积快照）。
+     *
+     * @param isFinal 文本流是否已结束。为 true 时把剩余尾巴也切出去，
+     *   并在队列念完后回调 [onDone]。
      */
-    fun speak(text: String, onDone: () -> Unit) {
-        val engine = tts
-        if (engine == null || !ready) {
-            Logger.w(TAG, "speak skipped: engine not ready")
-            onDone()
-            return
+    @Synchronized
+    fun feedReply(fullBody: String, isFinal: Boolean, onDone: () -> Unit = {}) {
+        val delta = if (fullBody.startsWith(lastBody)) {
+            fullBody.substring(lastBody.length)
+        } else {
+            // 正文被重写（换块/重试）：已念出去的收不回，从当前文本重新接上
+            Logger.w(TAG, "reply text rewritten (${lastBody.length} -> ${fullBody.length})")
+            pending.setLength(0)
+            fullBody
         }
-        onFinished = onDone
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
-        Logger.i(TAG, "speaking textLength=${text.length}")
+        lastBody = fullBody
+        if (delta.isNotEmpty()) pending.append(cleanForSpeech(delta))
+
+        cutReady(force = isFinal)
+
+        if (isFinal) {
+            streamClosed = true
+            onAllDone = onDone
+            if (queueCount == 0) {
+                // 没有可念的内容：立刻收尾，别让调用方一直等
+                drainAll()
+            }
+        }
     }
 
     fun stop() {
@@ -76,16 +128,79 @@ class SpeechSpeaker(private val context: Context) {
 
     @Synchronized
     fun shutdown() {
-        onFinished = null
+        onAllDone = null
         tts?.shutdown()
         tts = null
         ready = false
     }
 
-    private fun notifyFinished() {
-        val callback = onFinished
-        onFinished = null
-        Logger.i(TAG, "speech finished")
+    /** 把 [pending] 里够完整的句子切出去排队。 */
+    private fun cutReady(force: Boolean) {
+        while (true) {
+            val cut = nextCut(force) ?: break
+            val sentence = pending.substring(0, cut).trim()
+            pending.delete(0, cut)
+            if (sentence.isNotEmpty()) enqueue(sentence)
+        }
+    }
+
+    /** 返回可切位置（标点之后）；null 表示还攒得不够。 */
+    private fun nextCut(force: Boolean): Int? {
+        val text = pending
+        if (text.isEmpty()) return null
+
+        for (i in text.indices) {
+            if (HARD_BREAKS.contains(text[i])) {
+                // 很短的碎句也切（「你好。」），但不切单独一个标点
+                return if (i + 1 >= 3) i + 1 else continue
+            }
+        }
+
+        if (force) return text.length
+
+        if (text.length >= SOFT_CHUNK) {
+            for (i in text.length - 1 downTo SOFT_CHUNK - 1) {
+                if (SOFT_BREAKS.contains(text[i])) return i + 1
+            }
+        }
+
+        if (text.length >= MAX_CHUNK) return MAX_CHUNK
+        return null
+    }
+
+    private fun enqueue(text: String) {
+        val engine = tts
+        if (engine == null || !ready) {
+            Logger.w(TAG, "skip speaking (engine ready=$ready): ${text.take(20)}…")
+            return
+        }
+        queueCount++
+        engine.speak(text, TextToSpeech.QUEUE_ADD, null, "$UTTERANCE_PREFIX${sequence++}")
+        Logger.i(TAG, "queued textLength=${text.length} queue=$queueCount")
+    }
+
+    private fun onUtteranceFinished() {
+        val shouldDrain = synchronized(this) {
+            if (queueCount > 0) queueCount--
+            streamClosed && queueCount <= 0
+        }
+        if (shouldDrain) drainAll()
+    }
+
+    private fun drainAll() {
+        val callback = synchronized(this) {
+            val cb = onAllDone
+            onAllDone = null
+            streamClosed = false
+            cb
+        }
+        Logger.i(TAG, "reply stream finished")
         callback?.invoke()
     }
+
+    /** 去掉 markdown 标记，避免 TTS 把 `**`、`` ` `` 之类念出来。 */
+    private fun cleanForSpeech(text: String): String = text
+        .replace(Regex("\\[([^\\]]*)]\\([^)]*\\)"), "$1")
+        .replace(Regex("`+"), "")
+        .replace(Regex("[*_#>~|]"), "")
 }
