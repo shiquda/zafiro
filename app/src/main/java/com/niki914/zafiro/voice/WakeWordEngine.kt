@@ -42,6 +42,17 @@ class WakeWordEngine(
 
         /** 每轮读取的音频时长（秒）。100ms 是 sherpa 官方 demo 的经验值。 */
         private const val READ_INTERVAL_SEC = 0.1
+
+        /**
+         * 关键词路径的加分，sherpa Kotlin 默认 1.5。调高让关键词路径更占优。
+         */
+        private const val KEYWORDS_SCORE = 2.0f
+
+        /**
+         * 命中门槛，sherpa Kotlin 默认 0.25。真人实测「正常音量、一臂距离」时偏难触发，
+         * 调到 0.12；代价是嘈杂环境下更容易误报。
+         */
+        private const val KEYWORDS_THRESHOLD = 0.12f
     }
 
     private var audioRecord: AudioRecord? = null
@@ -134,6 +145,8 @@ class WakeWordEngine(
                     modelType = "zipformer2",
                 ),
                 keywordsFile = KEYWORDS,
+                keywordsScore = KEYWORDS_SCORE,
+                keywordsThreshold = KEYWORDS_THRESHOLD,
             )
             spotter = KeywordSpotter(assetManager = context.assets, config = config)
             stream = spotter.createStream(keywords)
@@ -141,6 +154,10 @@ class WakeWordEngine(
                 Logger.e(TAG, "Failed to create stream for keywords=$keywords")
                 return
             }
+            Logger.i(
+                TAG,
+                "spotter ready keywords=$keywords score=$KEYWORDS_SCORE threshold=$KEYWORDS_THRESHOLD",
+            )
 
             record.startRecording()
             Logger.i(TAG, "AudioRecord started, recordingState=${record.recordingState}")
