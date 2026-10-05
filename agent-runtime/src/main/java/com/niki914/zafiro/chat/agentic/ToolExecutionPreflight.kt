@@ -51,6 +51,7 @@ class ToolExecutionPreflight(
     private val sandboxRootsProvider: () -> Set<String> = ::defaultSandboxRoots,
 ) {
     suspend fun evaluate(command: String, toolName: String): PreflightDecision {
+        immutablePolicyViolation(command)?.let { return it }
         val rules = listExecutionRules()
         if (rules.isEmpty()) {
             return PreflightDecision(allowed = true)
@@ -110,6 +111,22 @@ class ToolExecutionPreflight(
             }
         }
         return PreflightDecision(allowed = true)
+    }
+
+
+    /**
+     * 执行规则文件是约束 Agent 的边界，不能由 Agent 自己读改。
+     * 启发式：命令或代码里出现策略路径就拒绝。动态拼出来的路径扫不到。
+     */
+    internal fun immutablePolicyViolation(text: String): PreflightDecision? {
+        val marker = IMMUTABLE_POLICY_MARKERS.firstOrNull { text.contains(it, ignoreCase = true) }
+            ?: return null
+        return PreflightDecision(
+            allowed = false,
+            code = "POLICY_IMMUTABLE",
+            reason = "Agent cannot read or modify security policy ('$marker').",
+            matchedRuleName = "immutable-policy",
+        )
     }
 
     /**
@@ -257,6 +274,10 @@ class ToolExecutionPreflight(
         private const val MAX_SHELL_PAYLOAD_DEPTH = 8
         private val SHELL_TOKEN_SEPARATORS = setOf(';', '&', '|', '`', '$', '(', ')', '<', '>')
         private val SHELL_COMMANDS = setOf("sh", "bash", "mksh")
+        internal val IMMUTABLE_POLICY_MARKERS = listOf(
+            "execution_rules.json",
+            "settings/rules/",
+        )
 
         /**
          * 沙箱外、值得为它试一次存储权限的路径根。/data 本身权限救不了

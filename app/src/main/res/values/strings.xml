@@ -384,6 +384,7 @@
     <!-- Tool display names -->
     <string name="ui_tool_display_terminal">终端</string>
     <string name="ui_tool_display_load_skill">加载技能</string>
+    <string name="ui_tool_display_skill_meta">维护技能</string>
     <string name="ui_tool_display_execute_python">Python</string>
     <string name="ui_tool_display_create_custom_tool">创建自定义工具</string>
     <string name="ui_tool_display_launch_app">启动应用</string>

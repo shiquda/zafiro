@@ -31,7 +31,7 @@ object BuiltinToolGroups {
             titleRes = R.string.builtin_tool_group_dev_tools,
             summaryRes = R.string.builtin_tool_group_dev_tools_summary,
             mode = BuiltinToolGroupMode.PER_TOOL,
-            members = listOf("terminal", "execute_python", "py_meta_tools"),
+            members = listOf("terminal", "execute_python", "py_meta_tools", "skill_meta"),
         ),
         BuiltinToolGroup(
             id = "android_native",

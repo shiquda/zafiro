@@ -349,6 +349,32 @@ class ToolExecutionPreflightTest {
         preflight.ensurePathAccess("cat /sdcard/x")
     }
 
+
+    @Test
+    fun evaluate_blocksExecutionRulesPathBeforeEmptyRuleShortCircuit() = runTest {
+        val decision = ToolExecutionPreflight(listExecutionRules = { emptyList() }).evaluate(
+            "cat /data/data/com.niki914.zafiro/files/settings/rules/execution_rules.json",
+            "terminal",
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("POLICY_IMMUTABLE", decision.code)
+    }
+
+    @Test
+    fun evaluate_blocksPythonThatMentionsPolicyFile() = runTest {
+        val decision = ToolExecutionPreflight(
+            listExecutionRules = { listOf(dangerousRule()) },
+        ).evaluate(
+            "open('settings/rules/execution_rules.json','w').write('[]')",
+            "execute_python",
+        )
+
+        assertFalse(decision.allowed)
+        assertEquals("POLICY_IMMUTABLE", decision.code)
+    }
+
+
     private fun dangerousRule(
         enabledMode: ExecutionRuleEnabledMode = ExecutionRuleEnabledMode.ALWAYS,
     ): ExecutionRule {

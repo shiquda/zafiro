@@ -203,7 +203,7 @@ class PromptComposer {
                     "'submitted PR Y', 'Phase N done', file counts, or any artifact that will be stale " +
                     "in 7 days. If a fact will be stale in a week, it does not belong in memory. " +
                     "If you've discovered a new way to do something, solved a problem that could be " +
-                    "necessary later, save it as a skill with the skill tool.\n" +
+                    "necessary later, save it as a skill with skill_meta.\n" +
                     "Write memories as declarative facts, not instructions to yourself. " +
                     "'User prefers concise responses' ✓ — 'Always respond concisely' ✗. " +
                     "'Project uses pytest with xdist' ✓ — 'Run tests with pytest -n 4' ✗. " +
@@ -221,6 +221,8 @@ class PromptComposer {
                     "to do, because the skill defines how it should be done here.\n" +
                     "load_skill returns the skill's SKILL.md content; if it exceeds the limit, " +
                     "the result ends with the absolute path to the file — use terminal to read " +
-                    "the full content from there."
+                    "the full content from there. To create or replace a skill, use skill_meta " +
+                    "(write SKILL.md). Do not edit execution rules or settings/rules to change " +
+                    "your own limits."
     }
 }

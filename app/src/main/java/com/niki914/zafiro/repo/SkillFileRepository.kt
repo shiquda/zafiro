@@ -52,6 +52,26 @@ class SkillFileRepository(
         return null
     }
 
+    fun writeSkill(id: String, content: String, overwrite: Boolean): RuntimeSkillValidation? {
+        if (content.isBlank()) {
+            return RuntimeSkillValidation("content", "Skill content is required.")
+        }
+        val resolved = when (val resolution = resolver.resolveSkillFile(id)) {
+            is SkillPathResolution.Invalid -> return resolution.validation
+            is SkillPathResolution.Resolved -> resolution
+        }
+        if (resolved.skillFile.exists() && !overwrite) {
+            return RuntimeSkillValidation(
+                "id",
+                "Skill already exists. Pass overwrite=true to replace it.",
+            )
+        }
+        resolved.skillDir.mkdirs()
+        resolved.skillFile.writeText(content, Charsets.UTF_8)
+        return null
+    }
+
+
     fun setEnabled(id: String, enabled: Boolean): RuntimeSkillValidation? {
         val resolved = resolveExisting(id) ?: return validationForMissingOrInvalid(id)
         stateStore.setEnabled(resolved.id, enabled)

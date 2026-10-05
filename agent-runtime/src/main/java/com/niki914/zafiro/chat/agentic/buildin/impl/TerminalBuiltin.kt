@@ -132,7 +132,6 @@ class TerminalBuiltin(
         val identity = args.identity ?: DEFAULT_LOCAL_IDENTITY
         val workdir = args.workdir
         val timeoutMs = timeoutSec * 1000L
-
         return if (args.background) {
             startBackgroundLocal(identity, workdir, command, timeoutMs, args.notifyOnComplete)
         } else {

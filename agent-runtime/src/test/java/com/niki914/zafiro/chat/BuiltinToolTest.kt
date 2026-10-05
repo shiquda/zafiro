@@ -52,6 +52,7 @@ class BuiltinToolTest {
                 "screen_operation_accessibility",
                 "screen_operation_shell",
                 "screenshot",
+                "skill_meta",
                 "terminal",
                 "view_image",
             ),

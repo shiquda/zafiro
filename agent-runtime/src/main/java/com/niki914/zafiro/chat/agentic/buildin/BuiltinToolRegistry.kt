@@ -11,6 +11,7 @@ import com.niki914.zafiro.chat.agentic.buildin.impl.PyMetaToolsBuiltin
 import com.niki914.zafiro.chat.agentic.buildin.impl.ScreenOperationAccessibilityBuiltin
 import com.niki914.zafiro.chat.agentic.buildin.impl.ScreenOperationShellBuiltin
 import com.niki914.zafiro.chat.agentic.buildin.impl.ScreenshotBuiltin
+import com.niki914.zafiro.chat.agentic.buildin.impl.SkillMetaBuiltin
 import com.niki914.zafiro.chat.agentic.buildin.impl.TerminalBuiltin
 import com.niki914.zafiro.chat.agentic.buildin.impl.ViewImageBuiltin
 
@@ -33,6 +34,7 @@ class BuiltinToolRegistry(
                 NotifyBuiltin(),
                 OpenUriBuiltin(),
                 LoadSkillBuiltin(),
+                SkillMetaBuiltin(),
                 TerminalBuiltin(),
                 FindInstalledAppsBuiltin(),
                 ScreenOperationAccessibilityBuiltin(),

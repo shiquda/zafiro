@@ -347,6 +347,7 @@
     <!-- Tool display names -->
     <string name="ui_tool_display_terminal">終端</string>
     <string name="ui_tool_display_load_skill">載入技能</string>
+    <string name="ui_tool_display_skill_meta">維護技能</string>
     <string name="ui_tool_display_execute_python">Python</string>
     <string name="ui_tool_display_create_custom_tool">建立自訂工具</string>
     <string name="ui_tool_display_launch_app">啟動應用</string>

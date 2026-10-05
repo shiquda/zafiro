@@ -64,6 +64,7 @@ object ToolPresentation {
     fun displayNameResOf(name: String): Int? = when (name) {
         "terminal" -> R.string.ui_tool_display_terminal
         "load_skill" -> R.string.ui_tool_display_load_skill
+        "skill_meta" -> R.string.ui_tool_display_skill_meta
         "execute_python" -> R.string.ui_tool_display_execute_python
         "create_custom_tool" -> R.string.ui_tool_display_create_custom_tool
         "launch_app" -> R.string.ui_tool_display_launch_app
@@ -112,6 +113,7 @@ object ToolPresentation {
         return when (name) {
             "terminal" -> args["command"]
             "load_skill" -> args["id"]
+            "skill_meta" -> args["id"]
             "execute_python" -> args["code"]
             else -> null
         }?.jsonPrimitive?.contentOrNull

@@ -172,6 +172,26 @@ class TerminalBuiltinTest {
     }
 
     @Test
+    fun invokeRawJson_policyFile_doesNotOpenSession() = runTest {
+        installRuntimeSettingsGatewayForTest()
+        val fakeRuntime = FakeTerminalRuntime(
+            nextResult = commandResult(stdout = "nope\n"),
+        )
+        installFakeRuntime(fakeRuntime).use {
+            installHandles("c003").use {
+                val json = invoke("""{"command":"cat settings/rules/execution_rules.json"}""")
+
+                assertEquals(
+                    "POLICY_IMMUTABLE",
+                    json["error"]!!.jsonObject["policy_code"]!!.jsonPrimitive.content,
+                )
+                assertTrue(fakeRuntime.openedIdentities.isEmpty())
+            }
+        }
+    }
+
+
+    @Test
     fun invokeRawJson_commandFirstWithWorkdir_opensSessionWithCwd() = runTest {
         installRuntimeSettingsGatewayForTest()
         val fakeRuntime = FakeTerminalRuntime(
@@ -655,3 +675,4 @@ class TerminalBuiltinTest {
         )
     }
 }
+

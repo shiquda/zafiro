@@ -384,6 +384,7 @@
     <!-- Tool display names -->
     <string name="ui_tool_display_terminal">ターミナル</string>
     <string name="ui_tool_display_load_skill">Skill 読み込み</string>
+    <string name="ui_tool_display_skill_meta">Skill 管理</string>
     <string name="ui_tool_display_execute_python">Python</string>
     <string name="ui_tool_display_create_custom_tool">カスタムツール作成</string>
     <string name="ui_tool_display_launch_app">アプリ起動</string>

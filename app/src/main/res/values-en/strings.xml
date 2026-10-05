@@ -385,6 +385,7 @@
     <!-- Tool display names -->
     <string name="ui_tool_display_terminal">Terminal</string>
     <string name="ui_tool_display_load_skill">Load Skill</string>
+    <string name="ui_tool_display_skill_meta">Maintain Skill</string>
     <string name="ui_tool_display_execute_python">Python</string>
     <string name="ui_tool_display_create_custom_tool">Create Custom Tool</string>
     <string name="ui_tool_display_launch_app">Launch App</string>

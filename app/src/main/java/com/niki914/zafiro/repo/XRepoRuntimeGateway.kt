@@ -10,6 +10,7 @@ import com.niki914.zafiro.settings.model.RuntimeLlmConfig
 import com.niki914.zafiro.settings.model.RuntimeLoadedSkill
 import com.niki914.zafiro.settings.model.RuntimeMcpServer
 import com.niki914.zafiro.settings.model.RuntimeSkillMetadata
+import com.niki914.zafiro.settings.model.RuntimeSkillValidation
 import com.niki914.zafiro.settings.model.RuntimeToolValidation
 
 class XRepoRuntimeGateway(
@@ -46,6 +47,19 @@ class XRepoRuntimeGateway(
     override suspend fun loadSkill(id: String): RuntimeLoadedSkill? {
         return repo.skills.getDetail(id)
     }
+
+    override suspend fun writeSkill(
+        id: String,
+        content: String,
+        overwrite: Boolean,
+    ): RuntimeSkillValidation? {
+        return repo.skills.write(id, content, overwrite)
+    }
+
+    override suspend fun deleteSkill(id: String): RuntimeSkillValidation? {
+        return repo.skills.delete(id)
+    }
+
 
     override suspend fun addMemory(value: String) {
         repo.memory.add(value)

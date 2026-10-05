@@ -159,6 +159,39 @@ class SkillFileRepositoryTest {
         assertNotNull(repository.delete("../escape"))
     }
 
+    @Test
+    fun writeSkill_createsEnablesAndRefusesOverwriteUntilAsked() {
+        val skillsRoot = temporaryFolder.newFolder("skills")
+        val repository = SkillFileRepository(skillsRoot)
+        val content = skillContent(name = "Wake")
+
+        assertNull(repository.writeSkill("wake-windows", content, overwrite = false))
+        assertEquals(content, repository.load("wake-windows")?.content)
+        assertEquals(listOf("wake-windows"), repository.listEnabled().map { it.id })
+
+        val refused = repository.writeSkill("wake-windows", skillContent(name = "Other"), overwrite = false)
+        assertEquals("id", refused?.field)
+        assertEquals(content, repository.load("wake-windows")?.content)
+
+        val replaced = skillContent(name = "Wake 2")
+        assertNull(repository.writeSkill("wake-windows", replaced, overwrite = true))
+        assertEquals(replaced, repository.load("wake-windows")?.content)
+    }
+
+    @Test
+    fun writeSkill_rejectsBlankTraversalAndSymlink() {
+        val skillsRoot = temporaryFolder.newFolder("skills")
+        val repository = SkillFileRepository(skillsRoot)
+        val outside = temporaryFolder.newFolder("outside")
+        Files.createSymbolicLink(File(skillsRoot, "linked").toPath(), outside.toPath())
+
+        assertNotNull(repository.writeSkill("wake-windows", "   ", overwrite = false))
+        assertNotNull(repository.writeSkill("../escape", skillContent(name = "X"), overwrite = false))
+        assertNotNull(repository.writeSkill("linked", skillContent(name = "X"), overwrite = false))
+        assertFalse(File(outside, "SKILL.md").exists())
+    }
+
+
     private fun writeSkill(root: File, id: String, content: String): File {
         val file = File(root, "$id/SKILL.md")
         file.parentFile?.mkdirs()

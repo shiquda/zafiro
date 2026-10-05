@@ -27,6 +27,11 @@ class SkillApi internal constructor(
         return repository().saveContent(id, content)
     }
 
+    suspend fun write(id: String, content: String, overwrite: Boolean = false): RuntimeSkillValidation? {
+        return repository().writeSkill(id, content, overwrite)
+    }
+
+
     suspend fun setEnabled(id: String, enabled: Boolean): RuntimeSkillValidation? {
         return repository().setEnabled(id, enabled)
     }

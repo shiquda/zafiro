@@ -7,6 +7,7 @@ import com.niki914.zafiro.settings.model.RuntimeLlmConfig
 import com.niki914.zafiro.settings.model.RuntimeLoadedSkill
 import com.niki914.zafiro.settings.model.RuntimeMcpServer
 import com.niki914.zafiro.settings.model.RuntimeSkillMetadata
+import com.niki914.zafiro.settings.model.RuntimeSkillValidation
 import com.niki914.zafiro.settings.model.RuntimeToolValidation
 
 interface RuntimeSettingsGateway {
@@ -15,6 +16,20 @@ interface RuntimeSettingsGateway {
     suspend fun listEnabledSkills(): List<RuntimeSkillMetadata> = emptyList()
 
     suspend fun loadSkill(id: String): RuntimeLoadedSkill? = null
+
+    suspend fun writeSkill(
+        id: String,
+        content: String,
+        overwrite: Boolean = false,
+    ): RuntimeSkillValidation? = RuntimeSkillValidation(
+        field = "id",
+        message = "Skill writes are not available.",
+    )
+
+    suspend fun deleteSkill(id: String): RuntimeSkillValidation? = RuntimeSkillValidation(
+        field = "id",
+        message = "Skill deletes are not available.",
+    )
 
     suspend fun listMcpServers(): List<RuntimeMcpServer>
 

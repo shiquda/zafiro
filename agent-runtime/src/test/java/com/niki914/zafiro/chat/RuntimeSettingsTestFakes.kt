@@ -12,6 +12,7 @@ import com.niki914.zafiro.settings.model.RuntimeLlmConfig
 import com.niki914.zafiro.settings.model.RuntimeLoadedSkill
 import com.niki914.zafiro.settings.model.RuntimeMcpServer
 import com.niki914.zafiro.settings.model.RuntimeSkillMetadata
+import com.niki914.zafiro.settings.model.RuntimeSkillValidation
 import com.niki914.zafiro.settings.model.RuntimeToolValidation
 
 internal fun installRuntimeSettingsGatewayForTest(
@@ -25,6 +26,7 @@ internal fun installRuntimeSettingsGatewayForTest(
     )
     return gateway
 }
+
 
 internal class FakeRuntimeSettingsGateway(
     var llmConfig: RuntimeLlmConfig = RuntimeLlmConfig(),
@@ -46,6 +48,7 @@ internal class FakeRuntimeSettingsGateway(
         private set
     var writeCount: Int = 0
         private set
+    val writtenSkills: MutableMap<String, String> = linkedMapOf()
     var failOnWriteNumber: Int? = null
     var nextSaveCustomPyToolValidation: RuntimeToolValidation? = null
     var listEnabledSkillsCallCount: Int = 0
@@ -67,6 +70,28 @@ internal class FakeRuntimeSettingsGateway(
         loadSkillCallCount++
         failLoadSkill?.let { throw it }
         return loadedSkills[id]
+    }
+
+    override suspend fun writeSkill(
+        id: String,
+        content: String,
+        overwrite: Boolean,
+    ): RuntimeSkillValidation? {
+        if (writtenSkills.containsKey(id) && !overwrite) {
+            return RuntimeSkillValidation(
+                field = "id",
+                message = "Skill already exists. Pass overwrite=true to replace it.",
+            )
+        }
+        writtenSkills[id] = content
+        return null
+    }
+
+    override suspend fun deleteSkill(id: String): RuntimeSkillValidation? {
+        if (writtenSkills.remove(id) == null) {
+            return RuntimeSkillValidation(field = "id", message = "Skill not found.")
+        }
+        return null
     }
 
     override suspend fun listMcpServers(): List<RuntimeMcpServer> = mcpServers
