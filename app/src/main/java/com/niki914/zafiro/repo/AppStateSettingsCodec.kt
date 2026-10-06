@@ -53,7 +53,7 @@ internal data class AppStateSettings(
     val floatingBallAutoExpand: Boolean = true,
     /** 回复朗读后端：zipvoice（端侧克隆）/ system（系统 TTS）。 */
     @SerialName("reply_voice_backend")
-    val replyVoiceBackend: String = "zipvoice",
+    val replyVoiceBackend: String = ReplyVoiceBackend.DEFAULT.storageValue,
 )
 
 internal object AppStateSettingsCodec {
