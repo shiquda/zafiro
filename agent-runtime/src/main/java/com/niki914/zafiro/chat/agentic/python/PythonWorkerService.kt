@@ -42,7 +42,13 @@ class PythonWorkerService : Service() {
         super.onCreate()
         pythonHandler.post {
             try {
-                Python.start(AndroidPlatform(applicationContext))
+                // service 在同一进程里被重建时（bind → unbind → bind）onCreate 会二次执行，
+                // 此时解释器已经起来了：再调 Python.start 会抛 IllegalStateException
+                // ("Python already started")，把 initFailure 永久置位，之后每个 exec/ping
+                // 都失败，而且异常会跨 Binder 抛回宿主进程变成 FATAL。
+                if (!Python.isStarted()) {
+                    Python.start(AndroidPlatform(applicationContext))
+                }
                 // runtime.py 从这里拿传输文件目录（cacheDir/py_output）；
                 // 不设则缺省 /tmp，Android 上不可写 → 写盘降级全量走 inline
                 Python.getInstance()

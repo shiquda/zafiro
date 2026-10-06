@@ -4,7 +4,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.RemoteException
 import com.niki914.logging.Logger
@@ -128,7 +127,13 @@ object PyRuntime {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            binder?.linkToDeath(deathRecipient, 0)
+            // 绑定完成时 binder 可能已经死了（worker 刚被 LMK 或 `am kill-all` 干掉）：
+            // linkToDeath 会抛 DeadObjectException，在回调里没人接就是主线程 FATAL，
+            // 会变成「崩溃 → worker 重启 → 再撞死 binder」的循环，把整个系统拖住。
+            // 这里只记日志，交给 isHealthy() 走正常的杀进程重连分支。
+            if (binder != null && runCatching { binder.linkToDeath(deathRecipient, 0) }.isFailure) {
+                Logger.w(LOG_TAG, "worker binder already dead on connect, health check will reconnect")
+            }
             pendingBinder.complete(binder)
         }
 
@@ -230,9 +235,13 @@ object PyRuntime {
         withTimeoutOrNull(pingTimeoutMs()) {
             try {
                 withContext(Dispatchers.IO) { svc.ping() } != null
-            } catch (_: RemoteException) {
-                false
-            } catch (_: DeadObjectException) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // 工作进程侧抛出的 RuntimeException（例如 Chaquopy 的
+                // "Python already started"）也会跨 Binder 抛回宿主进程。
+                // 这里必须吞掉并判定为不健康，交给 killAndReconnect 重连——
+                // 漏出去会变成主线程 FATAL，进而「崩溃 → worker 重启 → 再撞」循环。
                 false
             }
         } ?: false
