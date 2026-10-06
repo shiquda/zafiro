@@ -72,8 +72,13 @@ internal class LocalTtsVoice(
     /** stop 用：代次号一变，正在播放的句子立刻收尾。 */
     private val stopEpoch = AtomicInteger(0)
 
+    /** 播放轨道跨句复用：每句重建一次 AudioTrack 要几十毫秒，句间就成了一段可听的静音。 */
     @Volatile
     private var currentTrack: AudioTrack? = null
+    private var trackSampleRate = 0
+
+    /** 已经写进轨道的累计帧数（播放头是累计值，flush 后归零）。 */
+    private var writtenFrames = 0
 
     /** 排队区：合成线程从 [synthQueue] 取，放 [playQueue]；播放线程只消费 [playQueue]。 */
     private class Utterance(val text: String, val onDone: () -> Unit)
@@ -295,6 +300,11 @@ internal class LocalTtsVoice(
         // 而 generate 与 release 共用 lock，靠锁本身也不会出现 use-after-free。
         runCatching { synthThread.join(5_000) }
         runCatching { playThread.join(2_000) }
+        currentTrack?.let { track ->
+            runCatching { track.stop() }
+            runCatching { track.release() }
+        }
+        currentTrack = null
         synchronized(lock) {
             runCatching { tts?.release() }
             tts = null
@@ -379,6 +389,50 @@ internal class LocalTtsVoice(
     /** 播放整段合成结果；[epoch] 变化时提前收尾（stop 打断）。 */
     private fun play(samples: FloatArray, sampleRate: Int, epoch: Int) {
         if (samples.isEmpty()) return
+        val track = ensureTrack(sampleRate)
+        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
+        var offset = 0
+        while (offset < samples.size && epoch == stopEpoch.get()) {
+            val count = minOf(PLAY_CHUNK_SAMPLES, samples.size - offset)
+            val written = track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
+            if (written <= 0) {
+                Logger.w(TAG, "AudioTrack write=$written, abort playback")
+                break
+            }
+            offset += written
+        }
+        writtenFrames += offset
+        if (offset < samples.size) {
+            Logger.i(TAG, "playback interrupted at $offset/${samples.size}")
+            dropBuffered(track)
+            return
+        }
+        // write() 只表示数据进了 AudioTrack 的缓冲区，不等于已经播出去。
+        // 不等播放头追上就 stop/flush，会把每句的尾巴切掉（缓冲区约 0.2s ≈ 一两个音节），
+        // 听感就是「段与段之间吞字」。
+        awaitDrained(track, writtenFrames, sampleRate, epoch)
+        if (epoch != stopEpoch.get()) dropBuffered(track)
+    }
+
+    /** 打断时丢弃尚未播出的音频；flush 会把播放头归零，所以累计帧数一并清掉。 */
+    private fun dropBuffered(track: AudioTrack) {
+        runCatching { track.pause() }
+        runCatching { track.flush() }
+        writtenFrames = 0
+    }
+
+    /**
+     * 取（必要时新建）播放轨道。整轮对话只有一条轨道，句与句之间不再重建 ——
+     * 重建一次要几十毫秒，听感就是句间一段静音。
+     */
+    private fun ensureTrack(sampleRate: Int): AudioTrack {
+        val existing = currentTrack
+        if (existing != null && trackSampleRate == sampleRate) return existing
+        if (existing != null) {
+            runCatching { existing.stop() }
+            runCatching { existing.release() }
+            currentTrack = null
+        }
         val minBytes = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -405,53 +459,33 @@ internal class LocalTtsVoice(
             .build()
 
         currentTrack = track
-        try {
-            track.play()
-            var offset = 0
-            while (offset < samples.size) {
-                if (epoch != stopEpoch.get()) {
-                    Logger.i(TAG, "playback interrupted at $offset/${samples.size}")
-                    break
-                }
-                val count = minOf(PLAY_CHUNK_SAMPLES, samples.size - offset)
-                val written = track.write(samples, offset, count, AudioTrack.WRITE_BLOCKING)
-                if (written <= 0) {
-                    Logger.w(TAG, "AudioTrack write=$written, abort playback")
-                    break
-                }
-                offset += written
-            }
-            // write() 只表示数据进了 AudioTrack 的缓冲区，不等于已经播出去。
-            // 不等播放头追上就 stop/flush，会把每句的尾巴切掉（缓冲区约 0.2s ≈ 一两个音节），
-            // 听感就是「段与段之间吞字」。
-            if (epoch == stopEpoch.get()) awaitDrained(track, samples.size, sampleRate, epoch)
-        } finally {
-            currentTrack = null
-            runCatching { track.stop() }
-            runCatching { track.flush() }
-            runCatching { track.release() }
-        }
+        trackSampleRate = sampleRate
+        writtenFrames = 0
+        return track
     }
 
     /**
-     * 等播放头追上 [frames]（最多等这段音频的时长 + 2s）。
+     * 等播放头追上累计帧数 [targetFrames]（最多等剩余时长 + 2s）。
      *
+     * 播放头是轨道开始以来的累计值（flush 后归零），所以这里比较的是累计帧数而不是本句长度。
      * MODE_STREAM 下 `stop()` 是「放完已写入的数据再停」且**立刻返回**，紧接着的
-     * `flush()` 会把尚未播出去的缓冲丢掉 —— 每个分句的尾巴就是这样被切掉的。
+     * `flush()` 会把尚未播出去的缓冲丢掉 —— 不等播放头追上就把句子尾巴切掉，
+     * 听感就是「段与段之间吞字」。
      */
-    private fun awaitDrained(track: AudioTrack, frames: Int, sampleRate: Int, epoch: Int) {
-        val budgetMs = frames * 1000L / sampleRate.coerceAtLeast(1) + 2_000L
-        val deadline = System.currentTimeMillis() + budgetMs
+    private fun awaitDrained(track: AudioTrack, targetFrames: Int, sampleRate: Int, epoch: Int) {
+        val rate = sampleRate.coerceAtLeast(1)
+        val remaining = (targetFrames - track.playbackHeadPosition).coerceAtLeast(0).toLong()
+        val deadline = System.currentTimeMillis() + remaining * 1000L / rate + 2_000L
         val startedAt = System.currentTimeMillis()
         while (System.currentTimeMillis() < deadline) {
-            if (track.playbackHeadPosition >= frames) {
-                Logger.i(TAG, "drained played=$frames/$frames in ${System.currentTimeMillis() - startedAt}ms")
+            if (track.playbackHeadPosition >= targetFrames) {
+                Logger.i(TAG, "drained head=$targetFrames in ${System.currentTimeMillis() - startedAt}ms")
                 return
             }
             if (stopEpoch.get() != epoch) return
             Thread.sleep(10)
         }
-        Logger.w(TAG, "drain timeout played=${track.playbackHeadPosition}/$frames")
+        Logger.w(TAG, "drain timeout head=${track.playbackHeadPosition}/$targetFrames")
     }
 
     // ---- 参考音色 refer.wav 解析（仅 ZipVoice 用） ----------------------------
