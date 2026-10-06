@@ -33,6 +33,10 @@ class PermissionEntryGuardTest {
         "checkSelfPermission(" to listOf(
             AllowRule("permission/TargetStatus.kt", ""),
             AllowRule("permission/ShizukuHandler.kt", "Shizuku.checkSelfPermission"),
+            // 语音层：KWS/ASR 启动前必须同步判断录音权限，PermissionManager 是挂起式服务，
+            // 塞不进这两个同步入口，故显式放行（只读查询，不发起申请）。
+            AllowRule("voice/VoiceRecognizer.kt", "ContextCompat.checkSelfPermission"),
+            AllowRule("voice/WakeWordEngine.kt", "ContextCompat.checkSelfPermission"),
         ),
         // Manifest 里声明的权限名（弹窗权限名现在全在 business:permission 的 PermissionSpec）
         "POST_NOTIFICATIONS" to listOf(
