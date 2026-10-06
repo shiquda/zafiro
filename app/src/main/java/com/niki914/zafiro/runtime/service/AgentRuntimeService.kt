@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.DeadObjectException
@@ -81,16 +82,72 @@ class AgentRuntimeService : Service() {
     @Volatile
     private var replyStreamStarted = false
 
+    /** 当前前台服务是否已拿到 microphone 类型（决定退到后台后还能否持有麦克风）。 */
+    @Volatile
+    private var foregroundMicType = false
+
     override fun onCreate() {
         super.onCreate()
         instance = this
-        val initialNotification = ResidentNotificationBuilder.build(
-            context = this,
-            channelManager = notificationChannelManager,
-            status = agentControl.status.value,
-        )
-        startForeground(ResidentNotificationBuilder.NOTIFICATION_ID, initialNotification)
+        startForegroundWithMicFallback()
         observeStatus()
+    }
+
+    private fun buildResidentNotification(): Notification = ResidentNotificationBuilder.build(
+        context = this,
+        channelManager = notificationChannelManager,
+        status = agentControl.status.value,
+    )
+
+    /**
+     * 前台服务类型必须显式指定。
+     *
+     * 无参 [startForeground] 会套用 manifest 上的全部类型（`specialUse|microphone`），
+     * 而 Android 14 起**从后台**启动的 FGS 不允许使用 while-in-use 类型（microphone）：
+     * 服务被系统在后台重启（开机、被回收后重启）时会抛 SecurityException，
+     * onCreate 直接崩 —— 实测崩溃两次后 AM 放弃，常驻服务再也起不来。
+     *
+     * 所以先按 `specialUse|microphone` 试，被拒就退到只有 `specialUse`：服务一定活着，
+     * 麦克风类型等用户到前台再升级（见 [upgradeMicForegroundType]）。
+     */
+    private fun startForegroundWithMicFallback() {
+        val id = ResidentNotificationBuilder.NOTIFICATION_ID
+        val notification = buildResidentNotification()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(id, notification)
+            return
+        }
+        val micTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        try {
+            startForeground(id, notification, micTypes)
+            foregroundMicType = true
+            Logger.i(LOG_TAG, "foreground type=specialUse|microphone")
+        } catch (e: SecurityException) {
+            Logger.w(
+                LOG_TAG,
+                "microphone FGS type rejected (${e.message?.take(120)}), use specialUse only",
+            )
+            startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            foregroundMicType = false
+        }
+    }
+
+    /**
+     * 已经在用户交互路径上（点常驻开关、语音回合）时把前台类型升级到含 microphone，
+     * 之后即使退到后台也能继续持有麦克风。
+     */
+    private fun upgradeMicForegroundType() {
+        if (foregroundMicType || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val micTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        try {
+            startForeground(ResidentNotificationBuilder.NOTIFICATION_ID, buildResidentNotification(), micTypes)
+            foregroundMicType = true
+            Logger.i(LOG_TAG, "foreground type upgraded to specialUse|microphone")
+        } catch (e: SecurityException) {
+            Logger.w(LOG_TAG, "cannot upgrade to microphone FGS type: ${e.message?.take(120)}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -183,6 +240,15 @@ class AgentRuntimeService : Service() {
     @Synchronized
     private fun startWakeWordListening() {
         if (wakeWordEngine != null) return
+        // 走到这里都是用户交互路径（常驻开关、语音回合）：先把前台类型升到含 microphone，
+        // 否则音频一旦退到后台就会被系统收回，唤醒监听形同虚设。
+        upgradeMicForegroundType()
+        if (!foregroundMicType) {
+            Logger.w(
+                LOG_TAG,
+                "foreground type lacks microphone, wake listening only works while in foreground",
+            )
+        }
         val engine = WakeWordEngine(
             context = applicationContext,
             keywords = WAKE_WORD,
