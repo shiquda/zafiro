@@ -12,9 +12,10 @@ package com.niki914.zafiro.voice
  * - 代码块会被逐字念出来（`am force-stop com.niki914.zafiro` → "and do co Niky 90040"）。
  *
  * 因此分两层：
- * - [stripFencedBlocks] + [cleanMarkup] 处理 Markdown 结构，按增量调用；
- *   围栏要按「完整正文」重算，因为一次增量可能正好切在围栏行或代码行中间。
- * - [normalizeForSpeech] 处理读法，按切好的整句调用，避免增量边界把 `10:05` 拆成两半。
+ * - [stripFencedBlocks] 按「完整正文」重算（增量可能正好切在围栏行或代码行中间），
+ *   且返回值随正文增长单调变长；
+ * - [cleanMarkup] 与 [normalizeForSpeech] 都只在**切好的整句**上调用一次：增量边界会
+ *   落在 `| 项目 |`、`- `、`10:05` 中间，按增量清洗会把结构符号当垃圾删掉。
  */
 internal object SpeechTextNormalizer {
 
@@ -62,6 +63,9 @@ internal object SpeechTextNormalizer {
 
     /** 全角标点两侧的空格（只吃空格/制表符，换行要留给切句用）。 */
     private val SPACED_CJK_PUNCT = Regex("[ \\t]*([，。！？；：、])[ \\t]*")
+
+    /** 连续重复的句读：`适合不同场景——减脂` 两个破折号都变逗号就成了 `，，`。 */
+    private val DUPLICATE_PUNCT = Regex("([，。！？；：、])\\1+")
     private val TRAILING_SPACE = Regex("[ \\t]+(?=\\n)")
     private val LEADING_SPACE = Regex("\\n[ \\t]+")
     private val BLANK_LINES = Regex("\\n{2,}")
@@ -71,21 +75,40 @@ internal object SpeechTextNormalizer {
      *
      * 传完整正文而不是增量：一次增量可能正好落在围栏行或代码行中间，
      * 只看增量会认不出围栏，把代码念出来。
+     *
+     * **返回值必须随正文增长单调变长**，否则上层的增量比对会误判成「正文被重写」。
+     * 因此行首还可能是围栏前缀（`` `` `` / `~~`）的那一行先攒着不输出：`` `` `` 是正文、
+     * ` ``` ` 是围栏，多来一个字符结论就翻了，提前输出会让前缀缩短。流结束时传
+     * [flush] = true 收尾。
      */
-    fun stripFencedBlocks(body: String): String {
-        if (FENCE_PREFIXES.none { body.contains(it) }) return body
+    fun stripFencedBlocks(body: String, flush: Boolean = false): String {
         val out = StringBuilder(body.length)
         var inFence = false
-        body.split('\n').forEachIndexed { index, line ->
-            if (index > 0) out.append('\n')
+        var emittedLine = false
+        var start = 0
+        while (start <= body.length) {
+            val end = body.indexOf('\n', start)
+            val complete = end >= 0
+            val line = if (complete) body.substring(start, end) else body.substring(start)
+            // 未完成行只有在「可能是围栏前缀」时才需要攒着，别的行不会因为后续字符翻结论
+            if (!complete && !flush && isFencePrefix(line.trimStart())) break
+            if (emittedLine) out.append('\n')
+            emittedLine = true
             val head = line.trimStart()
-            when {
-                FENCE_PREFIXES.any { head.startsWith(it) } -> inFence = !inFence
-                !inFence -> out.append(line)
+            if (FENCE_PREFIXES.any { head.startsWith(it) }) {
+                inFence = !inFence
+            } else if (!inFence) {
+                out.append(line)
             }
+            if (!complete) break
+            start = end + 1
         }
         return out.toString()
     }
+
+    /** 该行首是否还可能是围栏行（空行也算：它还没有任何可判断的字符）。 */
+    private fun isFencePrefix(head: String): Boolean =
+        head.isEmpty() || FENCE_PREFIXES.any { it.startsWith(head) }
 
     /** 剥掉 Markdown 标记，只留可念的文字。 */
     fun cleanMarkup(text: String): String = text
@@ -131,6 +154,8 @@ internal object SpeechTextNormalizer {
         .replace("÷", "除以")
         // 全角标点两侧不留空格：`warm ， dinner` 念起来会多出停顿
         .replace(SPACED_CJK_PUNCT, "$1")
+        // 破折号/省略号改写可能把标点叠起来（`——` → `，，`），收成一个
+        .replace(DUPLICATE_PUNCT, "$1")
         // 收尾：合并空白、去掉行尾空格与连续空行
         .replace(MULTI_SPACE, " ")
         .replace(TRAILING_SPACE, "")

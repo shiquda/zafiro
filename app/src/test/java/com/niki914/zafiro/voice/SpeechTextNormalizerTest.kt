@@ -109,6 +109,15 @@ class SpeechTextNormalizerTest {
     }
 
     @Test
+    fun `重复句读收成一个`() {
+        // 真实回复里的 `适合不同场景——减脂期`：两个破折号都变逗号，不能留 `，，`
+        assertEquals(
+            "各有特点，适合不同场景，减脂期可选西瓜。",
+            speech("各有特点，适合不同场景——减脂期可选西瓜。"),
+        )
+    }
+
+    @Test
     fun `残留标记清零`() {
         val cleaned = speech(
             "## 结论\n**麦克风**正常，`唤醒词`已生效。\n- 完毕",

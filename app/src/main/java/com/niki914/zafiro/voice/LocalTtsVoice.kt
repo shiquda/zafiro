@@ -29,8 +29,9 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * 输出采样率不写死：一律用 `tts.sampleRate()` 驱动 AudioTrack。
  *
- * [speak] 阻塞（合成 + 播放），只在后台线程调用；由 [SpeechSpeaker] 保证串行，
- * 因此多句按顺序播放、不重叠。
+ * [speak] 只是排队、立刻返回：合成与播放由内部两条线程做流水线，**播上一句的同时合成
+ * 下一句**。否则每两句之间的空隙 = 下一句的整段合成时间（实测 0.7~3.6s，听感就是
+ * 「朗读明显中断」）。队列保证多次 [speak] 仍按调用顺序、不重叠地播放。
  */
 internal class LocalTtsVoice(
     context: Context,
@@ -47,6 +48,9 @@ internal class LocalTtsVoice(
 
         /** 播放分片大小（采样数），约几十毫秒，作为 stop 的响应粒度。 */
         private const val PLAY_CHUNK_SAMPLES = 1024
+
+        /** 最多预合成几句。1 就够填满段间空隙，再大只是白占内存。 */
+        private const val PREFETCH = 1
     }
 
     private val appContext = context.applicationContext
@@ -56,6 +60,7 @@ internal class LocalTtsVoice(
     private val lock = Any()
     private val modelDir: File? get() = spec?.let { File(appContext.filesDir, it.dir) }
 
+    @Volatile
     private var tts: OfflineTts? = null
     private var referenceAudio: FloatArray? = null
     private var referenceSampleRate = 0
@@ -69,6 +74,25 @@ internal class LocalTtsVoice(
 
     @Volatile
     private var currentTrack: AudioTrack? = null
+
+    /** 排队区：合成线程从 [synthQueue] 取，放 [playQueue]；播放线程只消费 [playQueue]。 */
+    private class Utterance(val text: String, val onDone: () -> Unit)
+
+    private class Rendered(val samples: FloatArray, val sampleRate: Int, val onDone: () -> Unit)
+
+    /** 排队区的监视器：需要 wait/notifyAll，所以用 Object 而不是 Any。 */
+    private val queueLock = java.lang.Object()
+    private val synthQueue = ArrayDeque<Utterance>()
+    private val playQueue = ArrayDeque<Rendered>()
+    private var closed = false
+
+    private val synthThread = Thread(::synthLoop, "ZafiroTtsSynth").apply { isDaemon = true }
+    private val playThread = Thread(::playLoop, "ZafiroTtsPlay").apply { isDaemon = true }
+
+    init {
+        synthThread.start()
+        playThread.start()
+    }
 
     /** 模型文件是否就位。 */
     fun isModelReady(): Boolean {
@@ -131,23 +155,59 @@ internal class LocalTtsVoice(
     }
 
     override fun speak(text: String, onDone: () -> Unit) {
+        synchronized(queueLock) {
+            if (closed) {
+                Logger.w(TAG, "voice closed, skip textLength=${text.length}")
+            } else {
+                synthQueue.addLast(Utterance(text, onDone))
+                queueLock.notifyAll()
+                return
+            }
+        }
+        // 已关闭：立刻回调，别让上层队列悬挂
+        onDone()
+    }
+
+    /** 合成线程：取一句、合成、放进播放队列。播上一句的同时它已经在合成下一句。 */
+    private fun synthLoop() {
+        while (true) {
+            val next = synchronized(queueLock) {
+                while (synthQueue.isEmpty() && !closed) queueLock.wait()
+                if (synthQueue.isEmpty()) return
+                // 预取上限：播不完就等着，别把整篇回复的音频都堆在内存里
+                while (playQueue.size > PREFETCH && !closed) queueLock.wait()
+                if (closed) return
+                synthQueue.removeFirst()
+            }
+            try {
+                synthOne(next)
+            } catch (e: Exception) {
+                Logger.e(TAG, "synthesis failed: ${e.message}")
+                next.onDone()
+            }
+        }
+    }
+
+    /** 合成一句；期间被打断就直接丢弃（不放进播放队列）。 */
+    private fun synthOne(next: Utterance) {
         val epoch = stopEpoch.get()
         if (prepare() != ReplyVoiceAvailability.Ready) {
-            Logger.w(TAG, "engine unavailable, skip textLength=${text.length}")
-            onDone()
+            Logger.w(TAG, "engine unavailable, skip textLength=${next.text.length}")
+            next.onDone()
             return
         }
         val engine = tts
         if (engine == null) {
-            Logger.w(TAG, "engine not ready after prepare, skip textLength=${text.length}")
-            onDone()
+            Logger.w(TAG, "engine not ready after prepare, skip textLength=${next.text.length}")
+            next.onDone()
             return
         }
 
         val startedAt = System.currentTimeMillis()
-        val audio = try {
+        // 引擎不是线程安全的：合成与 shutdown 的 release 必须互斥
+        val audio = synchronized(lock) {
             engine.generateWithConfig(
-                text = text,
+                text = next.text,
                 config = GenerationConfig(
                     speed = 1.0f,
                     sid = spec?.sid ?: 0,
@@ -157,10 +217,6 @@ internal class LocalTtsVoice(
                     numSteps = ZIPVOICE_NUM_STEPS,
                 ),
             )
-        } catch (e: Exception) {
-            Logger.e(TAG, "synthesis failed: ${e.message}")
-            onDone()
-            return
         }
 
         val synthMs = System.currentTimeMillis() - startedAt
@@ -168,24 +224,73 @@ internal class LocalTtsVoice(
         val rtf = if (audioMs > 0) synthMs.toDouble() / audioMs else 0.0
         Logger.i(
             TAG,
-            "synth id=${spec?.id} textLength=${text.length} synthMs=$synthMs audioMs=$audioMs " +
+            "synth id=${spec?.id} textLength=${next.text.length} synthMs=$synthMs audioMs=$audioMs " +
                 "rtf=${String.format(Locale.US, "%.3f", rtf)} sampleRate=${audio.sampleRate}",
         )
 
-        try {
-            play(audio.samples, audio.sampleRate, epoch)
-        } catch (e: Exception) {
-            Logger.e(TAG, "playback failed: ${e.message}")
+        if (epoch != stopEpoch.get()) {
+            next.onDone()
+            return
         }
-        onDone()
+        synchronized(queueLock) {
+            playQueue.addLast(Rendered(audio.samples, audio.sampleRate, next.onDone))
+            queueLock.notifyAll()
+        }
+    }
+
+    /** 播放线程：按顺序播 [playQueue]，每句播完回调一次。 */
+    private fun playLoop() {
+        while (true) {
+            val item = synchronized(queueLock) {
+                while (playQueue.isEmpty() && !closed) queueLock.wait()
+                if (playQueue.isEmpty()) return
+                val head = playQueue.removeFirst()
+                // 让合成线程接着预取
+                queueLock.notifyAll()
+                head
+            }
+            val epoch = stopEpoch.get()
+            try {
+                play(item.samples, item.sampleRate, epoch)
+            } catch (e: Exception) {
+                Logger.e(TAG, "playback failed: ${e.message}")
+            }
+            item.onDone()
+        }
     }
 
     override fun stop() {
         stopEpoch.incrementAndGet()
+        drainQueues().forEach { runCatching { it() } }
+    }
+
+    /**
+     * 清空排队区并返回需要回调的收尾函数。
+     *
+     * 回调一律在锁**外**执行：上层（[SpeechSpeaker]）的 `onDone` 会去拿它自己的锁，
+     * 在这里持锁回调就会形成反序加锁。
+     */
+    private fun drainQueues(): List<() -> Unit> {
+        val dropped = mutableListOf<() -> Unit>()
+        synchronized(queueLock) {
+            while (synthQueue.isNotEmpty()) dropped.add(synthQueue.removeFirst().onDone)
+            while (playQueue.isNotEmpty()) dropped.add(playQueue.removeFirst().onDone)
+            queueLock.notifyAll()
+        }
+        return dropped
     }
 
     override fun shutdown() {
         stopEpoch.incrementAndGet()
+        val dropped = drainQueues()
+        synchronized(queueLock) {
+            closed = true
+            queueLock.notifyAll()
+        }
+        // 等两条线程退出再释放引擎：合成线程可能正卡在 generate 里，
+        // 而 generate 与 release 共用 lock，靠锁本身也不会出现 use-after-free。
+        runCatching { synthThread.join(5_000) }
+        runCatching { playThread.join(2_000) }
         synchronized(lock) {
             runCatching { tts?.release() }
             tts = null
@@ -194,6 +299,7 @@ internal class LocalTtsVoice(
             referenceText = ""
             Logger.i(TAG, "released id=${spec?.id}")
         }
+        dropped.forEach { runCatching { it() } }
     }
 
     /** 按 [LocalTtsModelSpec.kind] 构建对应的 sherpa 子配置 + 规则 FST。 */
@@ -311,12 +417,37 @@ internal class LocalTtsVoice(
                 }
                 offset += written
             }
+            // write() 只表示数据进了 AudioTrack 的缓冲区，不等于已经播出去。
+            // 不等播放头追上就 stop/flush，会把每句的尾巴切掉（缓冲区约 0.2s ≈ 一两个音节），
+            // 听感就是「段与段之间吞字」。
+            if (epoch == stopEpoch.get()) awaitDrained(track, samples.size, sampleRate, epoch)
         } finally {
             currentTrack = null
             runCatching { track.stop() }
             runCatching { track.flush() }
             runCatching { track.release() }
         }
+    }
+
+    /**
+     * 等播放头追上 [frames]（最多等这段音频的时长 + 2s）。
+     *
+     * MODE_STREAM 下 `stop()` 是「放完已写入的数据再停」且**立刻返回**，紧接着的
+     * `flush()` 会把尚未播出去的缓冲丢掉 —— 每个分句的尾巴就是这样被切掉的。
+     */
+    private fun awaitDrained(track: AudioTrack, frames: Int, sampleRate: Int, epoch: Int) {
+        val budgetMs = frames * 1000L / sampleRate.coerceAtLeast(1) + 2_000L
+        val deadline = System.currentTimeMillis() + budgetMs
+        val startedAt = System.currentTimeMillis()
+        while (System.currentTimeMillis() < deadline) {
+            if (track.playbackHeadPosition >= frames) {
+                Logger.i(TAG, "drained played=$frames/$frames in ${System.currentTimeMillis() - startedAt}ms")
+                return
+            }
+            if (stopEpoch.get() != epoch) return
+            Thread.sleep(10)
+        }
+        Logger.w(TAG, "drain timeout played=${track.playbackHeadPosition}/$frames")
     }
 
     // ---- 参考音色 refer.wav 解析（仅 ZipVoice 用） ----------------------------
