@@ -10,6 +10,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.lifecycleScope
 import com.niki914.logging.Logger
+import com.niki914.zafiro.app.notification.ResidentNotificationManager
 import com.niki914.zafiro.app.ui.ZafiroApp
 import com.niki914.zafiro.app.ui.model.AppLaunchDecision
 import com.niki914.zafiro.app.ui.model.ThemeController
@@ -58,6 +59,14 @@ class MainActivity : AppCompatActivity() {
             // 回填型设置 flow 的冷启动回填（首帧真值，防“进设置页才生效”类 bug）
             runCatching { XRepo.hydrateSettings() }
                 .onFailure { Logger.w("niki914_zafiro_Main", "hydrate failed ${it.message}") }
+            // 用户回到前台 = 唯一能拿到 microphone 前台服务类型的时机（Android 14 只允许
+            // 前台/可见状态升级）。后台那次启动会被系统拒掉，而且 StateFlow 值没变不会再发一次，
+            // 所以这里显式补一次：服务收到后会把类型升回 specialUse|microphone 并真正开始唤醒监听。
+            runCatching {
+                if (XRepo.residentNotificationEnabled()) {
+                    ResidentNotificationManager.start(this@MainActivity)
+                }
+            }.onFailure { Logger.w("niki914_zafiro_Main", "restore resident failed ${it.message}") }
             decision
         }
         applyLanguageTag(launchDecision.languageTag)

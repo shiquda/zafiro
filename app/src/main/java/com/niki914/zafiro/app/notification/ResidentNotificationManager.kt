@@ -89,6 +89,13 @@ object ResidentNotificationManager {
         activeApprovalRequest = null
         cont?.cancel()
 
+        // 服务没在跑就没有什么可停的。这里若还是 startService，会把它从后台拉起来
+        // 只为让它自停，并且让进程立刻变成 cached-empty 被冻结 —— 开机时正是如此。
+        if (!AgentRuntimeService.isRunning()) {
+            Logger.i(TAG, "resident service not running, nothing to stop")
+            return
+        }
+
         val intent = Intent(context, AgentRuntimeService::class.java).apply {
             action = AgentRuntimeService.ACTION_STOP_RESIDENT
         }

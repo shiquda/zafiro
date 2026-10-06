@@ -14,6 +14,7 @@ import com.niki914.zafiro.settings.model.RuntimeTakeoverTarget
 import com.niki914.zafiro.settings.model.TAKEOVER_FIELD_NAME
 import com.niki914.zafiro.settings.model.TAKEOVER_FIELD_PATTERNS
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -428,8 +429,17 @@ object XRepo {
      * 响应式字段构造时已自注册到 hydrateSteps，新增无需手动登记。
      */
     suspend fun hydrateSettings() {
-        hydrateSteps.forEach { it() }
+        try {
+            hydrateSteps.forEach { it() }
+        } finally {
+            hydrationDone.complete(Unit)
+        }
     }
+
+    /** 水合完成信号：观察者若在读到真值前就行动，会把「猜的默认值」当成用户设置。 */
+    private val hydrationDone = CompletableDeferred<Unit>()
+
+    suspend fun awaitSettingsHydrated() = hydrationDone.await()
 
     private val themeModeField = PlainAppStateField(
         select = { themeMode },

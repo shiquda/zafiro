@@ -74,12 +74,18 @@ class App : Application() {
         observeSpeechBackend()
     }
 
-    private fun observeResidentNotification() = launchFeatureFlagObserver(
-        enabledFlow = XRepo.residentNotificationEnabledSetting,
-        permission = Permission.NOTIFICATION,
-        onPermissionMissing = { XRepo.setResidentNotificationEnabled(false) },
-    ) { enabled ->
-        if (enabled) ResidentNotificationManager.start(this) else ResidentNotificationManager.stop(this)
+    private fun observeResidentNotification() = applicationScope.launch {
+        // flow 的初值是猜的默认值（false），设置读盘完成前收集会被当成「用户把常驻关了」——
+        // 于是给服务发一个 STOP：服务被从后台拉起来又立刻自停，进程还会被判成 cached-empty
+        // 冻住（开机后常驻就是这么没的）。等水合完成再开始观察。
+        XRepo.awaitSettingsHydrated()
+        launchFeatureFlagObserver(
+            enabledFlow = XRepo.residentNotificationEnabledSetting,
+            permission = Permission.NOTIFICATION,
+            onPermissionMissing = { XRepo.setResidentNotificationEnabled(false) },
+        ) { enabled ->
+            if (enabled) ResidentNotificationManager.start(this@App) else ResidentNotificationManager.stop(this@App)
+        }
     }
 
     private fun observeFloatingBall() = launchFeatureFlagObserver(

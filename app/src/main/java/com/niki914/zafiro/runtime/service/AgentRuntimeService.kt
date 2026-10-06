@@ -29,6 +29,7 @@ import com.niki914.zafiro.api.model.AgentState
 import com.niki914.zafiro.api.model.TurnFailureCode
 import com.niki914.zafiro.app.MainActivity
 import com.niki914.zafiro.chat.ToolStatusLabels
+import com.niki914.zafiro.repo.XRepo
 import com.niki914.zafiro.runtime.ipc.IAgentRuntimeService
 import com.niki914.zafiro.runtime.ipc.IAgentStoreService
 import com.niki914.zafiro.runtime.ipc.IRenderFrameCallback
@@ -91,6 +92,27 @@ class AgentRuntimeService : Service() {
         instance = this
         startForegroundWithMicFallback()
         observeStatus()
+        scope.launch { restoreResidentFromSettings() }
+    }
+
+    /**
+     * 常驻状态以持久化开关为准。
+     *
+     * 服务可能是被系统在后台拉起来的（开机、被回收后重启），此时 App 进程里的观察者
+     * 可能还没跑完甚至根本没跑，不能只依赖它 —— 否则服务起来后没人叫它常驻，
+     * 一个 STOP 或一次 unBind 就没了。
+     */
+    private suspend fun restoreResidentFromSettings() {
+        // 先对齐一次设置：进程内的响应式 flow 初值是猜的默认值，没人读盘就一直是错的
+        // （朗读后端、悬浮球等都在读 flow）。App 侧要等水合才敢动常驻开关，也是靠这一步。
+        runCatching { XRepo.hydrateSettings() }
+            .onFailure { Logger.w(LOG_TAG, "hydrate settings failed: ${it.message}") }
+        val enabled = runCatching { XRepo.residentNotificationEnabled() }.getOrDefault(false)
+        if (!enabled || isResidentRequested) return
+        Logger.i(LOG_TAG, "resident enabled in settings, resume resident mode")
+        isResidentRequested = true
+        updateResidentNotification()
+        startWakeWordListening()
     }
 
     private fun buildResidentNotification(): Notification = ResidentNotificationBuilder.build(
@@ -114,7 +136,9 @@ class AgentRuntimeService : Service() {
         val id = ResidentNotificationBuilder.NOTIFICATION_ID
         val notification = buildResidentNotification()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            // API 28 及以下没有前台服务类型门槛，前台服务即可录音
             startForeground(id, notification)
+            foregroundMicType = true
             return
         }
         val micTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
@@ -136,17 +160,21 @@ class AgentRuntimeService : Service() {
     /**
      * 已经在用户交互路径上（点常驻开关、语音回合）时把前台类型升级到含 microphone，
      * 之后即使退到后台也能继续持有麦克风。
+     *
+     * @return 本次调用是否真的补上了 microphone 类型（供调用方判断要不要重开唤醒引擎）。
      */
-    private fun upgradeMicForegroundType() {
-        if (foregroundMicType || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+    private fun upgradeMicForegroundType(): Boolean {
+        if (foregroundMicType || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val micTypes = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         try {
             startForeground(ResidentNotificationBuilder.NOTIFICATION_ID, buildResidentNotification(), micTypes)
             foregroundMicType = true
             Logger.i(LOG_TAG, "foreground type upgraded to specialUse|microphone")
+            return true
         } catch (e: SecurityException) {
             Logger.w(LOG_TAG, "cannot upgrade to microphone FGS type: ${e.message?.take(120)}")
+            return false
         }
     }
 
@@ -239,15 +267,21 @@ class AgentRuntimeService : Service() {
      */
     @Synchronized
     private fun startWakeWordListening() {
-        if (wakeWordEngine != null) return
-        // 走到这里都是用户交互路径（常驻开关、语音回合）：先把前台类型升到含 microphone，
-        // 否则音频一旦退到后台就会被系统收回，唤醒监听形同虚设。
-        upgradeMicForegroundType()
+        // 走到这里都是用户交互路径（常驻开关、语音回合、开机恢复常驻）：
+        // 先把前台类型升到含 microphone —— 系统只允许处于前台/可见状态的进程拿这个类型。
+        val typeUpgraded = upgradeMicForegroundType()
+        if (wakeWordEngine != null) {
+            // 已有引擎时类型补齐了必须重开一次：否则它会挂在拿不到麦克风的 AudioRecord 上，
+            // 看着在跑其实听不见（开机后进前台就是这个状态）。
+            if (!typeUpgraded) return
+            Logger.i(LOG_TAG, "mic FGS type granted, restarting wake word engine")
+            stopWakeWordListening()
+        }
         if (!foregroundMicType) {
-            Logger.w(
-                LOG_TAG,
-                "foreground type lacks microphone, wake listening only works while in foreground",
-            )
+            // 拿不到 microphone 类型就别起引擎：后台录音会被 appops 直接拒掉，
+            // 起一个听不见的引擎只会把问题藏起来。等下次进前台（升级成功后）再起。
+            Logger.w(LOG_TAG, "no microphone FGS type yet, defer wake listening until foreground")
+            return
         }
         val engine = WakeWordEngine(
             context = applicationContext,
