@@ -26,6 +26,7 @@ import com.niki914.store.XIpcStoreRepository
 import com.niki914.zafiro.api.Agent
 import com.niki914.zafiro.api.TurnStart
 import com.niki914.zafiro.api.model.AgentState
+import com.niki914.zafiro.api.model.isRunning
 import com.niki914.zafiro.api.model.TurnFailureCode
 import com.niki914.zafiro.app.MainActivity
 import com.niki914.zafiro.chat.ToolStatusLabels
@@ -46,6 +47,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicReference
@@ -470,6 +472,12 @@ class AgentRuntimeService : Service() {
          */
         private const val TONE_SETTLE_MS = 400L
 
+        /**
+         * 等回合真正开始的超时。`stream()` 之后要先做配置刷新与工具解析（实测 ~400ms），
+         * 这段时间 status 还是上一轮的 Idle，不能拿它当「回合结束」。
+         */
+        private const val TURN_START_TIMEOUT_MS = 5_000L
+
         const val ACTION_START_RESIDENT = "com.niki914.zafiro.action.START_RESIDENT"
         const val ACTION_STOP_RESIDENT = "com.niki914.zafiro.action.STOP_RESIDENT"
 
@@ -788,7 +796,22 @@ class AgentRuntimeService : Service() {
                     }
                 }
 
-                agent.status.first { it is AgentState.Idle }
+                // 回合结束的判据是 status 回到 Idle。但 `stream()` 返回到 round 真正开始
+                // 之间有一小段窗口（配置刷新、工具解析，实测 ~400ms），此时 status 还是
+                // 上一次留下的 Idle —— 直接等 Idle 会立刻命中它，把空帧当成回合结束
+                // （实测模型 3.9s 才开口、帧在 1.5s 就收尾，朗读一个字都拿不到）。
+                // 所以先等它离开 Idle；真的一直没离开（发起即失败）就按原样收尾，别卡住宿主。
+                val started = withTimeoutOrNull(TURN_START_TIMEOUT_MS) {
+                    agent.status.first { it.isRunning }
+                }
+                if (started == null) {
+                    Logger.w(
+                        LOG_TAG,
+                        "turn never left idle within ${TURN_START_TIMEOUT_MS}ms, finish frame as is",
+                    )
+                } else {
+                    agent.status.first { it is AgentState.Idle }
+                }
                 conversationJob.cancel()
             }
 
