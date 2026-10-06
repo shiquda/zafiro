@@ -11,8 +11,9 @@ import java.util.concurrent.Executors
  * 调用方在回合开始时 [beginReply]，然后每次正文有变化就 [feedReply]；
  * 文本流结束时传 `isFinal = true`，全部念完（或失败）后回调一次。
  *
- * 本身只负责「句切分 + 后端调度」，真正的发音交给 [ReplyVoice]：
+ * 本身只负责「句切分 + 文本归一化 + 后端调度」，真正的发音交给 [ReplyVoice]：
  * 默认走端侧本地音色（[LocalTtsModels.DEFAULT_ID]），模型目录缺失或加载失败时自动回落系统 TTS。
+ * Markdown 正文改写成可念文本的规则见 [SpeechTextNormalizer]。
  * 后端选择在实例创建时读取一次；切换设置由调用方重建本实例（见
  * `AgentRuntimeService.ACTION_SPEECH_BACKEND_CHANGED`）。
  */
@@ -53,8 +54,8 @@ class SpeechSpeaker(private val context: Context) {
     /** 选定并预热过的后端；只在 [worker] 上读写。 */
     private var activeVoice: ReplyVoice? = null
 
-    /** 已经喂进来的正文（累积快照），用来算增量。 */
-    private var lastBody = ""
+    /** 已经喂进来的**可念**正文（代码块过滤后），用来算增量。 */
+    private var lastSpeakable = ""
 
     /** 尚未切出去的正文尾巴。 */
     private val pending = StringBuilder()
@@ -72,7 +73,7 @@ class SpeechSpeaker(private val context: Context) {
     /** 开始一轮回复朗读：清掉上一轮残留的正文与队列状态。 */
     @Synchronized
     fun beginReply() {
-        lastBody = ""
+        lastSpeakable = ""
         pending.setLength(0)
         streamClosed = false
         onAllDone = null
@@ -87,16 +88,19 @@ class SpeechSpeaker(private val context: Context) {
      */
     @Synchronized
     fun feedReply(fullBody: String, isFinal: Boolean, onDone: () -> Unit = {}) {
-        val delta = if (fullBody.startsWith(lastBody)) {
-            fullBody.substring(lastBody.length)
+        // 先按围栏过滤：代码块里的内容不念（逐字念 shell/代码没有意义）。
+        // 按完整正文重算，因为一次增量可能正好切在围栏行或代码行中间。
+        val speakable = SpeechTextNormalizer.stripFencedBlocks(fullBody)
+        val delta = if (speakable.startsWith(lastSpeakable)) {
+            speakable.substring(lastSpeakable.length)
         } else {
             // 正文被重写（换块/重试）：已念出去的收不回，从当前文本重新接上
-            Logger.w(TAG, "reply text rewritten (${lastBody.length} -> ${fullBody.length})")
+            Logger.w(TAG, "reply text rewritten (${lastSpeakable.length} -> ${speakable.length})")
             pending.setLength(0)
-            fullBody
+            speakable
         }
-        lastBody = fullBody
-        if (delta.isNotEmpty()) pending.append(cleanForSpeech(delta))
+        lastSpeakable = speakable
+        if (delta.isNotEmpty()) pending.append(SpeechTextNormalizer.cleanMarkup(delta))
 
         cutReady(force = isFinal)
 
@@ -132,7 +136,12 @@ class SpeechSpeaker(private val context: Context) {
     private fun cutReady(force: Boolean) {
         while (true) {
             val cut = nextCut(force) ?: break
-            val sentence = pending.substring(0, cut).trim()
+            // 整句上再过一遍结构清洗：行首列表符号可能正好被增量边界切成两半
+            // （`-` 和它后面的空格分属两次增量），只按增量清洗会漏掉它。
+            // 读法归一化同样只能在这里做：增量边界可能正好切在 `10:05` 中间。
+            val sentence = SpeechTextNormalizer.normalizeForSpeech(
+                SpeechTextNormalizer.cleanMarkup(pending.substring(0, cut).trim()),
+            )
             pending.delete(0, cut)
             if (sentence.isNotEmpty()) enqueue(sentence)
         }
@@ -251,13 +260,4 @@ class SpeechSpeaker(private val context: Context) {
         callback?.invoke()
     }
 
-    /**
-     * 去掉 markdown 标记与列表符号,避免 TTS 把 `**`、反引号念出来,
-     * 或把 `•` 念成「点」。数字、单位、百分号留给引擎处理。
-     */
-    private fun cleanForSpeech(text: String): String = text
-        .replace(Regex("\\[([^\\]]*)]\\([^)]*\\)"), "$1")
-        .replace(Regex("`+"), "")
-        .replace(Regex("[*_#>~|]"), "")
-        .replace(Regex("[•·▪◦]"), " ")
 }

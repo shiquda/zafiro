@@ -123,7 +123,7 @@ internal object LocalTtsModels {
         vocoder = "vocos-16khz-univ.onnx",
         lexicon = "lexicon.txt",
         dataDir = "espeak-ng-data",
-        ruleFsts = listOf("date-zh.fst"),
+        ruleFsts = listOf("date-zh.fst", "number-zh.fst"),
         // 与系统 TTS 现有 1.4× 语速等效
         lengthScale = 1f / 1.4f,
     )
