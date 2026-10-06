@@ -47,7 +47,10 @@ internal object TimeStretcher {
         if (kotlin.math.abs(speed - 1f) < IDENTITY_EPSILON) return samples
 
         val overlap = FRAME - SYNTH_HOP
-        val analysisHop = SYNTH_HOP / speed
+        // 提速 = 分析位置走得更快：分析跳距 = 合成跳距 × 倍率。
+        // （写反成 ÷ speed 时，每帧只消费 1/speed² 的输入，导致每块尾巴被切掉、
+        //   同时实际语速反而变慢 —— 听感就是「偏慢 + 断续」。）
+        val analysisHop = SYNTH_HOP * speed
         // 末尾补一帧零，保证循环总能写满，再按目标长度截断（否则会丢掉尾巴）
         val padded = samples.copyOf(samples.size + FRAME)
         val target = (samples.size / speed).toInt()

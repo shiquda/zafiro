@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.sin
 
 /**
@@ -20,6 +21,27 @@ class TimeStretcherTest {
     private fun sine(freq: Double, seconds: Double): FloatArray {
         val n = (rate * seconds).toInt()
         return FloatArray(n) { i -> sin(2.0 * PI * freq * i / rate).toFloat() * 0.5f }
+    }
+
+    /** 某个频率在某段区间上的能量（等价于带通滤波后的能量）。 */
+    private fun bandEnergy(x: FloatArray, from: Int, count: Int, freq: Double): Double {
+        var re = 0.0
+        var im = 0.0
+        val n = minOf(count, x.size - from)
+        for (i in 0 until n) {
+            val a = 2.0 * PI * freq * i / rate
+            re += x[from + i] * cos(a)
+            im += x[from + i] * sin(a)
+        }
+        return (re * re + im * im) / (n * n)
+    }
+
+    /** 一段时间内的样本能量总和。 */
+    private fun energy(x: FloatArray, from: Int, count: Int): Double {
+        var sum = 0.0
+        val n = minOf(count, x.size - from).coerceAtLeast(0)
+        for (i in 0 until n) sum += x[from + i].toDouble() * x[from + i]
+        return sum
     }
 
     /** 某个频率上的 DFT 能量（Goertzel 式直接求和，样本量小，够用）。 */
@@ -65,6 +87,49 @@ class TimeStretcherTest {
         val shifted = energyAt(out, 440.0 * 1.2, from)
         assertTrue("原音高能量应保留（kept=$kept, base=$base）", kept > base * 0.3)
         assertTrue("不应出现 1.2 倍音高（shifted=$shifted vs kept=$kept）", kept > shifted * 4)
+    }
+
+    @Test
+    fun `输入内容必须按倍率完整映射到输出`() {
+        // 音-静-音-静 四段，用窗口能量包络判定「输入第几段现在出现在输出的哪个位置」。
+        // 纯音做 WSOLA 会有相位叠加误差，所以只看包络、不按频带判定。
+        val seg = rate / 4
+        val input = FloatArray(seg * 4) { i ->
+            if ((i / seg) % 2 == 0) sin(2.0 * PI * 300.0 * i / rate).toFloat() else 0f
+        }
+        val win = (rate * 0.04).toInt()
+        // 正确实现下输入比例与输出比例恒等（整段内容压进更短的输出里）；
+        // 若输入被消费得比输出慢，映射会变成「输出 0.6 处其实来自输入 0.42 处」。
+        fun winEnergyAtFraction(x: FloatArray, fraction: Double): Double {
+            val from = (x.size * fraction).toInt().coerceIn(0, x.size - win)
+            return energy(x, from, win) / win
+        }
+        for (speed in listOf(1.2f, 1.4f)) {
+            val out = TimeStretcher.stretch(input, speed)
+            val toneWin = winEnergyAtFraction(out, 0.60)
+            val silenceWin = winEnergyAtFraction(out, 0.85)
+            assertTrue(
+                "speed=$speed 输入 0.6 处（第二段声音）的能量 $toneWin 应远大于 0.85 处（末段静音）的 $silenceWin",
+                toneWin > silenceWin * 4 + 0.01,
+            )
+        }
+    }
+
+    @Test
+    fun `尾部内容必须保留`() {
+        // 前 0.8s 静音 + 后 0.2s 正弦：变速后末尾仍应有接近该正弦量级的声音
+        val tone = sine(300.0, 0.2)
+        val toneEnergy = energy(tone, 0, tone.size)
+        val input = FloatArray(rate) { i -> if (i < rate * 8 / 10) 0f else tone[i - rate * 8 / 10] }
+        for (speed in listOf(1.2f, 1.4f)) {
+            val out = TimeStretcher.stretch(input, speed)
+            val tailFrom = (out.size * 0.8).toInt()
+            val e = energy(out, tailFrom, out.size - tailFrom)
+            assertTrue(
+                "speed=$speed 尾部能量 $e 应达到该正弦能量的 1/3（${toneEnergy / 3}）以上",
+                e > toneEnergy / 3,
+            )
+        }
     }
 
     @Test

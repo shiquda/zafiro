@@ -134,10 +134,10 @@ internal object LocalTtsModels {
         dataDir = "espeak-ng-data",
         ruleFsts = listOf("date-zh.fst", "number-zh.fst"),
         // 模型按自然速合成（自然速 ≈4.4 字/秒 ≈265 字/分），语速由 speechRate 在播放前做保音高变速。
-        // 实测：模型自己压时长到 1.2x 起就开始吞音（`清爽水润，甜而多汁` → "甜多汁"），
-        // 而「自然速合成 + 保音高变速到 1.2x」的回听与自然速一致（ffmpeg atempo 参考实现验证过）。
+        // 实测：模型自己压时长到 1.2x 起就开始吞音（`清爽水润，甜而多汁` → "甜多汁"）；
+        // 而「自然速合成 + 保音高变速」到 1.4x 的回听仍与自然速一致（ffmpeg atempo 参考实现 + 本仓库 WSOLA 对比验证）。
         lengthScale = 1.0f,
-        speechRate = 1.2f,
+        speechRate = 1.4f,
     )
 
     /** 中文女声从 sid=3（`zf_001`）起。 */
