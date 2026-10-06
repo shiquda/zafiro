@@ -125,7 +125,11 @@ internal object LocalTtsModels {
         dataDir = "espeak-ng-data",
         ruleFsts = listOf("date-zh.fst", "number-zh.fst"),
         // 与系统 TTS 现有 1.4× 语速等效
-        lengthScale = 1f / 1.4f,
+        // 语速 1.2x。实测（同一模型离线回听 + SenseVoice）：
+        // 自然速约 4.4 字/秒（≈265 字/分），1.2x ≈ 320 字/分仍清晰；
+        // 1.4x ≈ 370 字/分 起模型开始吞音连读（`苹果居中` → "苹果粥"、`清爽水润，甜而多汁` → "清爽润甜汁"），
+        // 听感就是「段间轻微缺字」。AudioTrack 的变速是纯重采样会变调，保音高得换 MediaPlayer，暂不做。
+        lengthScale = 1f / 1.2f,
     )
 
     /** 中文女声从 sid=3（`zf_001`）起。 */
