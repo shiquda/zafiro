@@ -3,7 +3,9 @@ package com.niki914.zafiro.app
 import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.content.ContextCompat
 import com.google.android.material.color.DynamicColors
 import com.niki914.logging.Logger
 import com.niki914.xposed.api.util.ContextProvider
@@ -18,12 +20,14 @@ import com.niki914.zafiro.chat.agentic.python.PyRuntime
 import com.niki914.zafiro.repo.UpdateCheckHolder
 import com.niki914.zafiro.repo.XRepo
 import com.niki914.zafiro.runtime.createAppRuntimeBridge
+import com.niki914.zafiro.runtime.service.AgentRuntimeService
 import com.niki914.zafiro.service.requireService
 import com.niki914.zafiro.settings.RuntimeEnvironment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -67,6 +71,7 @@ class App : Application() {
 
         observeFloatingBall()
         observeResidentNotification()
+        observeSpeechBackend()
     }
 
     private fun observeResidentNotification() = launchFeatureFlagObserver(
@@ -83,6 +88,24 @@ class App : Application() {
         onPermissionMissing = { XRepo.setFloatingBallEnabled(false) },
     ) { enabled ->
         if (enabled) FloatingBallOverlayManager.show(this) else FloatingBallOverlayManager.dismiss()
+    }
+
+    /**
+     * 朗读后端变化：服务里的 SpeechSpeaker 已经缓存了旧后端，通知它丢掉缓存，
+     * 下一次朗读按新后端重建（无需重启进程）。服务没在跑时无需通知 —— 重建时自然读新值。
+     */
+    private fun observeSpeechBackend() {
+        applicationScope.launch {
+            XRepo.replyVoiceBackendSetting.drop(1).collect { backend ->
+                if (!AgentRuntimeService.isRunning()) return@collect
+                Logger.i(TAG, "reply voice backend changed -> $backend, notify runtime service")
+                val intent = Intent(this@App, AgentRuntimeService::class.java).apply {
+                    action = AgentRuntimeService.ACTION_SPEECH_BACKEND_CHANGED
+                }
+                runCatching { ContextCompat.startForegroundService(this@App, intent) }
+                    .onFailure { Logger.w(TAG, "notify speech backend failed: ${it.message}") }
+            }
+        }
     }
 
     /**
@@ -104,6 +127,10 @@ class App : Application() {
                 }
             }
         }
+    }
+
+    private companion object {
+        private const val TAG = "niki914_zafiro_App"
     }
 
     /**

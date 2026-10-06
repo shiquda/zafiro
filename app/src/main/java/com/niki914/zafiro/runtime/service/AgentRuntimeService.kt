@@ -112,6 +112,11 @@ class AgentRuntimeService : Service() {
                 // 与唤醒命中同一条链路：切到 scope 再停 KWS，避免自己 join 自己
                 scope.launch { captureVoiceTurn() }
             }
+            ACTION_SPEECH_BACKEND_CHANGED -> {
+                Logger.i(LOG_TAG, "ACTION_SPEECH_BACKEND_CHANGED -> rebuild reply speaker")
+                speechSpeaker?.shutdown()
+                speechSpeaker = null
+            }
             ACTION_START_RESIDENT -> {
                 isResidentRequested = true
                 updateResidentNotification()
@@ -370,6 +375,10 @@ class AgentRuntimeService : Service() {
 
         /** 对话页语音按钮：等效于喊一次唤醒词，直接走「提示音 → 录音 → ASR → 一轮 Agent」。 */
         const val ACTION_VOICE_INPUT = "com.niki914.zafiro.action.VOICE_INPUT"
+
+        /** 朗读后端设置变化：丢弃缓存的朗读器，下次朗读按新后端重建。 */
+        const val ACTION_SPEECH_BACKEND_CHANGED =
+            "com.niki914.zafiro.action.SPEECH_BACKEND_CHANGED"
         private const val MAX_QUERY_LENGTH = 8192
         private const val STORE_CHANNEL_ID = "nexus_xservice_default_channel"
         private const val STORE_CHANNEL_NAME = "Zafiro"
@@ -379,6 +388,9 @@ class AgentRuntimeService : Service() {
         fun notifyUpdate() {
             instance?.updateResidentNotification()
         }
+
+        /** 服务是否在跑。设置变更通知前先查，避免把没在跑的服务拉起来。 */
+        fun isRunning(): Boolean = instance != null
     }
 
     fun updateResidentNotification() {

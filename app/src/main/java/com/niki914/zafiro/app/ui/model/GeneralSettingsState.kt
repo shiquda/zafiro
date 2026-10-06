@@ -7,11 +7,13 @@ import com.niki914.zafiro.business.permission.PermissionState
 import com.niki914.uikit.base.ComposeMVIViewModel
 import com.niki914.zafiro.repo.XRepo
 import com.niki914.zafiro.service.requireService
+import com.niki914.zafiro.voice.ReplyVoiceBackend
 
 sealed interface GeneralSettingsDialog {
     data object Language : GeneralSettingsDialog
     data object IdleTimeout : GeneralSettingsDialog
     data object RetryAttempts : GeneralSettingsDialog
+    data object ReplyVoiceBackend : GeneralSettingsDialog
 }
 
 data class GeneralSettingsUiState(
@@ -24,6 +26,7 @@ data class GeneralSettingsUiState(
     val idleTimeoutSeconds: Long = 60L,
     val retryMaxAttempts: Int = 3,
     val keepScreenOn: Boolean = true,
+    val replyVoiceBackend: String = ReplyVoiceBackend.DEFAULT.storageValue,
     val activeDialog: GeneralSettingsDialog? = null,
     val isLoading: Boolean = false,
 )
@@ -41,6 +44,7 @@ sealed interface GeneralSettingsIntent {
     data class SelectIdleTimeout(val seconds: Long) : GeneralSettingsIntent
     data class SelectRetryMaxAttempts(val attempts: Int) : GeneralSettingsIntent
     data class ToggleKeepScreenOn(val enabled: Boolean) : GeneralSettingsIntent
+    data class SelectReplyVoiceBackend(val backend: String) : GeneralSettingsIntent
 }
 
 sealed interface GeneralSettingsEffect {
@@ -66,6 +70,7 @@ class GeneralSettingsViewModel : ComposeMVIViewModel<GeneralSettingsIntent, Gene
             is GeneralSettingsIntent.SelectIdleTimeout -> selectIdleTimeout(intent.seconds)
             is GeneralSettingsIntent.SelectRetryMaxAttempts -> selectRetryMaxAttempts(intent.attempts)
             is GeneralSettingsIntent.ToggleKeepScreenOn -> toggleKeepScreenOn(intent.enabled)
+            is GeneralSettingsIntent.SelectReplyVoiceBackend -> selectReplyVoiceBackend(intent.backend)
         }
     }
 
@@ -78,6 +83,7 @@ class GeneralSettingsViewModel : ComposeMVIViewModel<GeneralSettingsIntent, Gene
             val idleTimeoutSeconds = XRepo.llmIdleTimeoutSeconds()
             val retryMaxAttempts = XRepo.llmRetryMaxAttempts()
             val keepScreenOn = XRepo.keepScreenOn()
+            val replyVoiceBackend = XRepo.replyVoiceBackend()
             val floatingBallEnabled = XRepo.floatingBallEnabled()
             val floatingBallAutoExpand = XRepo.floatingBallAutoExpand()
             val residentNotificationEnabled = XRepo.residentNotificationEnabled()
@@ -89,6 +95,7 @@ class GeneralSettingsViewModel : ComposeMVIViewModel<GeneralSettingsIntent, Gene
                     idleTimeoutSeconds = idleTimeoutSeconds,
                     retryMaxAttempts = retryMaxAttempts,
                     keepScreenOn = keepScreenOn,
+                    replyVoiceBackend = replyVoiceBackend,
                     floatingBallEnabled = floatingBallEnabled,
                     floatingBallAutoExpand = floatingBallAutoExpand,
                     residentNotificationEnabled = residentNotificationEnabled,
@@ -193,6 +200,16 @@ class GeneralSettingsViewModel : ComposeMVIViewModel<GeneralSettingsIntent, Gene
         updateState { copy(keepScreenOn = enabled) }
         try {
             XRepo.setKeepScreenOn(enabled)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            throw e
+        }
+    }
+
+    private suspend fun selectReplyVoiceBackend(backend: String) {
+        updateState { copy(replyVoiceBackend = backend, activeDialog = null) }
+        try {
+            XRepo.setReplyVoiceBackend(backend)
         } catch (e: Throwable) {
             e.printStackTrace()
             throw e

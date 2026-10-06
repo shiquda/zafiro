@@ -1,5 +1,6 @@
 package com.niki914.zafiro.repo
 
+import com.niki914.zafiro.voice.ReplyVoiceBackend
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -50,6 +51,9 @@ internal data class AppStateSettings(
     /** 悬浮球在回合结束/审批到达时是否自动展开。 */
     @SerialName("floating_ball_auto_expand")
     val floatingBallAutoExpand: Boolean = true,
+    /** 回复朗读后端：zipvoice（端侧克隆）/ system（系统 TTS）。 */
+    @SerialName("reply_voice_backend")
+    val replyVoiceBackend: String = "zipvoice",
 )
 
 internal object AppStateSettingsCodec {
@@ -61,9 +65,20 @@ internal object AppStateSettingsCodec {
     fun parse(jsonString: String): AppStateSettings {
         return try {
             // 显式 serializer：与 ConversationRepo 一致（reified 重载在本模块不可用）。
-            json.decodeFromString(AppStateSettings.serializer(), jsonString).let {
+            json.decodeFromString(AppStateSettings.serializer(), jsonString).let { loaded ->
                 // 损坏文件里的空串兜底：setter 只写 system/light/dark。
-                if (it.themeMode.isBlank()) it.copy(themeMode = "dark") else it
+                val themeFixed = if (loaded.themeMode.isBlank()) {
+                    loaded.copy(themeMode = "dark")
+                } else {
+                    loaded
+                }
+                // 未知后端值（旧版本/手改文件）回默认，避免下游解析出意外分支。
+                val backend = ReplyVoiceBackend.fromStored(themeFixed.replyVoiceBackend)
+                if (backend.storageValue == themeFixed.replyVoiceBackend) {
+                    themeFixed
+                } else {
+                    themeFixed.copy(replyVoiceBackend = backend.storageValue)
+                }
             }
         } catch (_: SerializationException) {
             AppStateSettings()

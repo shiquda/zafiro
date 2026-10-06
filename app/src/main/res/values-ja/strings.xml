@@ -419,6 +419,10 @@
     <string name="ui_settings_general_retry_summary">リクエスト失敗後の自動リトライ</string>
     <string name="ui_settings_general_keep_screen_on">回答中は画面をオンに保つ</string>
     <string name="ui_settings_general_keep_screen_on_summary">エージェントの応答とツール実行中は画面をオフにしません</string>
+    <string name="ui_settings_general_reply_voice">回答読み上げバックエンド</string>
+    <string name="ui_settings_general_reply_voice_summary">エージェントの回答を読み上げる音声合成を選択</string>
+    <string name="ui_settings_general_reply_voice_local">オンデバイス音声（ローカルモデル）</string>
+    <string name="ui_settings_general_reply_voice_system">システム TTS</string>
     <string name="ui_settings_general_always_show_message_actions">メッセージ操作を常に表示</string>
     <string name="ui_settings_saved_configuration_title">保存済みの設定</string>
     <string name="ui_settings_saved_configuration_delete_title">設定の削除</string>

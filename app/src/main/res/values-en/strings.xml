@@ -420,6 +420,10 @@
     <string name="ui_settings_general_retry_summary">Automatic retries after a failed request</string>
     <string name="ui_settings_general_keep_screen_on">Keep screen on while answering</string>
     <string name="ui_settings_general_keep_screen_on_summary">Keep the screen on while the agent is responding and running tools</string>
+    <string name="ui_settings_general_reply_voice">Reply voice backend</string>
+    <string name="ui_settings_general_reply_voice_summary">Choose which speech synthesis reads agent replies</string>
+    <string name="ui_settings_general_reply_voice_local">On-device voice (local model)</string>
+    <string name="ui_settings_general_reply_voice_system">System TTS</string>
     <string name="ui_settings_general_always_show_message_actions">Always show message actions</string>
     <string name="ui_settings_saved_configuration_title">Saved configurations</string>
     <string name="ui_settings_saved_configuration_delete_title">Delete configuration</string>

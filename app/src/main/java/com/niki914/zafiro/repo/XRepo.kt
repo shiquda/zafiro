@@ -35,6 +35,7 @@ import com.niki914.zafiro.settings.model.RuntimeMcpServer as McpServer
 import com.niki914.zafiro.settings.model.RuntimeTakeoverRule as TakeoverRule
 import com.niki914.zafiro.settings.model.RuntimeTakeoverRuleValidation as TakeoverRuleValidation
 import com.niki914.zafiro.settings.model.RuntimeToolValidation as ToolValidation
+import com.niki914.zafiro.voice.ReplyVoiceBackend
 
 object XRepo {
     private const val LOG_TAG = "niki914_zafiro_XRepo"
@@ -84,6 +85,7 @@ object XRepo {
         floatingBallEnabledField.flow.value = false
         residentNotificationEnabledField.flow.value = false
         floatingBallAutoExpandField.flow.value = true
+        replyVoiceBackendField.flow.value = ReplyVoiceBackend.DEFAULT.storageValue
     }
 
     internal suspend fun context(): Context {
@@ -352,6 +354,18 @@ object XRepo {
     suspend fun keepScreenOn(): Boolean = keepScreenOnField.get()
 
     suspend fun setKeepScreenOn(value: Boolean) = keepScreenOnField.set(value)
+
+    /** 回复朗读后端的进程内热更新通道：读时回填初值，写时同步。 */
+    private val replyVoiceBackendField = ReactiveAppStateField(
+        default = ReplyVoiceBackend.DEFAULT.storageValue,
+        select = { replyVoiceBackend },
+        update = { copy(replyVoiceBackend = it) },
+    )
+    val replyVoiceBackendSetting: MutableStateFlow<String> get() = replyVoiceBackendField.flow
+
+    suspend fun replyVoiceBackend(): String = replyVoiceBackendField.get()
+
+    suspend fun setReplyVoiceBackend(value: String) = replyVoiceBackendField.set(value)
 
     /** 消息操作行常显开关的进程内热更新通道：读时回填初值，写时同步。 */
     private val alwaysShowMessageActionsField = ReactiveAppStateField(

@@ -1,10 +1,9 @@
 package com.niki914.zafiro.voice
 
 import android.content.Context
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import com.niki914.logging.Logger
-import java.util.Locale
+import com.niki914.zafiro.repo.XRepo
+import java.util.concurrent.Executors
 
 /**
  * 把 Agent 的回复流式念出来：正文每长出一句就排队合成，而不是等整个回合结束再统一朗读。
@@ -12,13 +11,15 @@ import java.util.Locale
  * 调用方在回合开始时 [beginReply]，然后每次正文有变化就 [feedReply]；
  * 文本流结束时传 `isFinal = true`，全部念完（或失败）后回调一次。
  *
- * 走系统 TTS（本机默认引擎是 sherpa-onnx 中文引擎）。
+ * 本身只负责「句切分 + 后端调度」，真正的发音交给 [ReplyVoice]：
+ * 默认走端侧本地音色（[LocalTtsModels.DEFAULT_ID]），模型目录缺失或加载失败时自动回落系统 TTS。
+ * 后端选择在实例创建时读取一次；切换设置由调用方重建本实例（见
+ * `AgentRuntimeService.ACTION_SPEECH_BACKEND_CHANGED`）。
  */
 class SpeechSpeaker(private val context: Context) {
 
     companion object {
         private const val TAG = "ZafiroSpeaker"
-        private const val UTTERANCE_PREFIX = "zafiro-reply-"
 
         /** 句末标点：一到就切，保证「说一句、播一句」的低延迟。 */
         private const val HARD_BREAKS = "。！？!?；;"
@@ -35,12 +36,22 @@ class SpeechSpeaker(private val context: Context) {
         /** 无论如何都不断超过这个字数。 */
         private const val MAX_CHUNK = 120
 
-        /** 语速。1.0 是引擎默认，1.4 比默认快一档、又不到赶的程度。 */
-        private const val SPEECH_RATE = 1.4f
+        private const val WORKER_NAME = "ZafiroReplyVoice"
     }
 
-    private var tts: TextToSpeech? = null
-    private var ready = false
+    private val systemVoice = SystemTtsVoice(context)
+    private val localVoice = LocalTtsVoice(context, LocalTtsModels.byId(LocalTtsModels.DEFAULT_ID))
+
+    /**
+     * 引擎交互串行化：合成（重活）与后端选择都在这个线程上，既不卡主线程，
+     * 也让多句天然按顺序播放、不重叠。
+     */
+    private val worker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, WORKER_NAME).apply { isDaemon = true }
+    }
+
+    /** 选定并预热过的后端；只在 [worker] 上读写。 */
+    private var activeVoice: ReplyVoice? = null
 
     /** 已经喂进来的正文（累积快照），用来算增量。 */
     private var lastBody = ""
@@ -48,7 +59,6 @@ class SpeechSpeaker(private val context: Context) {
     /** 尚未切出去的正文尾巴。 */
     private val pending = StringBuilder()
 
-    private var sequence = 0
     private var queueCount = 0
     private var streamClosed = false
     private var onAllDone: (() -> Unit)? = null
@@ -56,34 +66,7 @@ class SpeechSpeaker(private val context: Context) {
     /** 异步初始化引擎。可重复调用。 */
     @Synchronized
     fun initialize() {
-        if (tts != null) return
-        tts = TextToSpeech(context) { status ->
-            if (status != TextToSpeech.SUCCESS) {
-                Logger.e(TAG, "TTS init failed, status=$status")
-                return@TextToSpeech
-            }
-            val engine = tts ?: return@TextToSpeech
-            val language = engine.setLanguage(Locale.CHINA)
-            // 必须等引擎就绪后再设，之后所有 speak 都按这个语速走
-            engine.setSpeechRate(SPEECH_RATE)
-            if (language == TextToSpeech.LANG_MISSING_DATA ||
-                language == TextToSpeech.LANG_NOT_SUPPORTED
-            ) {
-                Logger.w(TAG, "Chinese unsupported, setLanguage=$language")
-            }
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) = Unit
-
-                override fun onDone(utteranceId: String?) = onUtteranceFinished()
-
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) = onUtteranceFinished()
-
-                override fun onError(utteranceId: String?, errorCode: Int) = onUtteranceFinished()
-            })
-            ready = true
-            Logger.i(TAG, "TTS ready, engine=${engine.defaultEngine}, language=$language, rate=$SPEECH_RATE")
-        }
+        post { runCatching { resolveVoice() }.onFailure { Logger.w(TAG, "voice warm up failed: ${it.message}") } }
     }
 
     /** 开始一轮回复朗读：清掉上一轮残留的正文与队列状态。 */
@@ -128,15 +111,21 @@ class SpeechSpeaker(private val context: Context) {
     }
 
     fun stop() {
-        tts?.stop()
+        localVoice.stop()
+        systemVoice.stop()
     }
 
     @Synchronized
     fun shutdown() {
         onAllDone = null
-        tts?.shutdown()
-        tts = null
-        ready = false
+        localVoice.stop()
+        systemVoice.stop()
+        post {
+            localVoice.shutdown()
+            systemVoice.shutdown()
+        }
+        // 已排队的释放任务照常执行，之后线程退出
+        worker.shutdown()
     }
 
     /** 把 [pending] 里够完整的句子切出去排队。 */
@@ -155,7 +144,7 @@ class SpeechSpeaker(private val context: Context) {
         if (text.isEmpty()) return null
 
         for (i in text.indices) {
-            if (HARD_BREAKS.contains(text[i])) {
+            if (HARD_BREAKS.contains(text[i]) || isSentencePeriod(text, i)) {
                 // 很短的碎句也切（「你好。」），但不切单独一个标点
                 return if (i + 1 >= 3) i + 1 else continue
             }
@@ -173,15 +162,74 @@ class SpeechSpeaker(private val context: Context) {
         return null
     }
 
+    /**
+     * ASCII 句点是否算句末。
+     *
+     * 中文回复靠 `。` 就能流式切句，英文回复只有 `.`，不额外认它就得等整段回复念完，
+     * 流式朗读形同失效。但 `.` 同时出现在小数（`3.14`）、域名（`github.com`）里，
+     * 所以只在「后面已跟空白、且前面不是数字或点」时才当句末；行尾的 `.` 由
+     * [nextCut] 的 `force` 分支兜底。
+     */
+    private fun isSentencePeriod(text: CharSequence, i: Int): Boolean {
+        if (text[i] != '.') return false
+        val prev = text.getOrNull(i - 1) ?: return false
+        if (prev.isDigit() || prev == '.') return false
+        val next = text.getOrNull(i + 1) ?: return false
+        return next.isWhitespace()
+    }
+
     private fun enqueue(text: String) {
-        val engine = tts
-        if (engine == null || !ready) {
-            Logger.w(TAG, "skip speaking (engine ready=$ready): ${text.take(20)}…")
-            return
-        }
         queueCount++
-        engine.speak(text, TextToSpeech.QUEUE_ADD, null, "$UTTERANCE_PREFIX${sequence++}")
-        Logger.i(TAG, "queued textLength=${text.length} queue=$queueCount")
+        post {
+            val voice = try {
+                resolveVoice()
+            } catch (e: Exception) {
+                Logger.e(TAG, "voice unavailable: ${e.message}")
+                null
+            }
+            if (voice == null) {
+                // 保证每句都有回调，别让上层队列悬挂
+                onUtteranceFinished()
+                return@post
+            }
+            Logger.i(TAG, "queued backend=${voice.name} textLength=${text.length}")
+            voice.speak(text) { onUtteranceFinished() }
+        }
+    }
+
+    /**
+     * 只在 [worker] 上调用：确定本轮后端并预热。
+     * 后端 = 本地音色（[LocalTtsModels]），不可用/未配置时回落系统 TTS。
+     */
+    private fun resolveVoice(): ReplyVoice {
+        activeVoice?.let { return it }
+
+        val preferred = ReplyVoiceBackend.fromStored(XRepo.replyVoiceBackendSetting.value)
+        val voice = when (preferred) {
+            ReplyVoiceBackend.System -> systemVoice
+            ReplyVoiceBackend.Local -> when (localVoice.prepare()) {
+                ReplyVoiceAvailability.Ready -> localVoice
+                ReplyVoiceAvailability.NotConfigured -> {
+                    // 没配本地模型：不是故障，静默走系统 TTS
+                    Logger.i(TAG, "local TTS model not configured, using system TTS")
+                    systemVoice
+                }
+
+                ReplyVoiceAvailability.Failed -> {
+                    Logger.w(TAG, "local TTS unavailable, fallback to system TTS")
+                    systemVoice
+                }
+            }
+        }
+        voice.prepare()
+        activeVoice = voice
+        Logger.i(TAG, "reply voice backend=${voice.name} (preferred=${preferred.storageValue})")
+        return voice
+    }
+
+    private fun post(task: () -> Unit) {
+        if (worker.isShutdown) return
+        runCatching { worker.execute(task) }
     }
 
     private fun onUtteranceFinished() {

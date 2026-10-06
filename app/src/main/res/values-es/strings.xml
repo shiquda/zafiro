@@ -420,6 +420,10 @@
     <string name="ui_settings_general_retry_summary">Reintentos automáticos tras un error de solicitud</string>
     <string name="ui_settings_general_keep_screen_on">Mantener la pantalla encendida al responder</string>
     <string name="ui_settings_general_keep_screen_on_summary">Mantener la pantalla encendida mientras el agente responde y ejecuta herramientas</string>
+    <string name="ui_settings_general_reply_voice">Motor de voz de respuesta</string>
+    <string name="ui_settings_general_reply_voice_summary">Elige qué síntesis de voz lee las respuestas del agente</string>
+    <string name="ui_settings_general_reply_voice_local">Voz en el dispositivo (modelo local)</string>
+    <string name="ui_settings_general_reply_voice_system">TTS del sistema</string>
     <string name="ui_settings_general_always_show_message_actions">Mostrar siempre las acciones de los mensajes</string>
     <string name="ui_settings_saved_configuration_title">Configuraciones guardadas</string>
     <string name="ui_settings_saved_configuration_delete_title">Eliminar configuración</string>

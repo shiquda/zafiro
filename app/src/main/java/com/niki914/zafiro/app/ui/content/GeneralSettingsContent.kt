@@ -21,6 +21,7 @@ import com.niki914.zafiro.app.ui.model.GeneralSettingsIntent
 import com.niki914.zafiro.app.ui.model.GeneralSettingsViewModel
 import com.niki914.zafiro.app.ui.nav.ThemeSettingsPage
 import com.niki914.zafiro.app.ui.nav.ZafiroPage
+import com.niki914.zafiro.voice.ReplyVoiceBackend
 
 /**
  * General Settings：外观与语言、悬浮与通知、对话与交互、运行与控制 4 个分组。
@@ -36,6 +37,7 @@ private const val ALWAYS_SHOW_ACTIONS_ROW_ID = "general.always_show_message_acti
 private const val IDLE_TIMEOUT_ROW_ID = "general.idle_timeout"
 private const val RETRY_ATTEMPTS_ROW_ID = "general.retry_attempts"
 private const val KEEP_SCREEN_ON_ROW_ID = "general.keep_screen_on"
+private const val REPLY_VOICE_ROW_ID = "general.reply_voice"
 
 private const val LANGUAGE_TAG_ZH_CN = "zh-CN"
 private const val LANGUAGE_TAG_ZH_TW = "zh-TW"
@@ -172,6 +174,11 @@ fun GeneralSettingsContent(
                         title = stringResource(R.string.ui_settings_general_keep_screen_on),
                         checked = uiState.keepScreenOn,
                     ),
+                    SettingsRowSpec.Navigation(
+                        id = REPLY_VOICE_ROW_ID,
+                        title = stringResource(R.string.ui_settings_general_reply_voice),
+                        currentState = replyVoiceBackendLabel(uiState.replyVoiceBackend),
+                    ),
                 ),
             ),
         ),
@@ -187,6 +194,7 @@ fun GeneralSettingsContent(
                         APPEARANCE_ROW_ID -> onPush(ThemeSettingsPage)
                         IDLE_TIMEOUT_ROW_ID -> viewModel.sendIntent(GeneralSettingsIntent.OpenDialog(GeneralSettingsDialog.IdleTimeout))
                         RETRY_ATTEMPTS_ROW_ID -> viewModel.sendIntent(GeneralSettingsIntent.OpenDialog(GeneralSettingsDialog.RetryAttempts))
+                        REPLY_VOICE_ROW_ID -> viewModel.sendIntent(GeneralSettingsIntent.OpenDialog(GeneralSettingsDialog.ReplyVoiceBackend))
                     }
 
                 is SettingsRowAction.ToggleChanged ->
@@ -244,7 +252,44 @@ fun GeneralSettingsContent(
             viewModel.sendIntent(GeneralSettingsIntent.SelectRetryMaxAttempts(option))
         },
     )
+
+    SingleChoiceLiquidDialog(
+        visible = uiState.activeDialog == GeneralSettingsDialog.ReplyVoiceBackend,
+        onDismissRequest = { viewModel.sendIntent(GeneralSettingsIntent.DismissDialog) },
+        title = stringResource(R.string.ui_settings_general_reply_voice),
+        hint = stringResource(R.string.ui_settings_general_reply_voice_summary),
+        options = replyVoiceOptions(),
+        selectedId = uiState.replyVoiceBackend,
+        optionId = { it.backend.storageValue },
+        optionLabel = { it.label },
+        onSelect = { option ->
+            viewModel.sendIntent(GeneralSettingsIntent.SelectReplyVoiceBackend(option.backend.storageValue))
+        },
+    )
 }
+
+data class ReplyVoiceOption(
+    val backend: ReplyVoiceBackend,
+    val label: String,
+)
+
+@Composable
+private fun replyVoiceBackendLabel(storageValue: String): String {
+    return replyVoiceOptions().firstOrNull { it.backend.storageValue == storageValue }?.label
+        ?: stringResource(R.string.ui_settings_general_reply_voice_local)
+}
+
+@Composable
+private fun replyVoiceOptions(): List<ReplyVoiceOption> = listOf(
+    ReplyVoiceOption(
+        backend = ReplyVoiceBackend.Local,
+        label = stringResource(R.string.ui_settings_general_reply_voice_local),
+    ),
+    ReplyVoiceOption(
+        backend = ReplyVoiceBackend.System,
+        label = stringResource(R.string.ui_settings_general_reply_voice_system),
+    ),
+)
 
 data class IdleTimeoutOption(
     /** 持久化值：0 = 不超时。 */
