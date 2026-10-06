@@ -220,12 +220,16 @@ internal class LocalTtsVoice(
         }
 
         val synthMs = System.currentTimeMillis() - startedAt
-        val audioMs = audio.samples.size * 1000L / audio.sampleRate.coerceAtLeast(1)
+        val rate = spec?.speechRate ?: 1.0f
+        // 模型按自然速出音，再保音高变速：直接压 lengthScale 会让模型吞音（见 LocalTtsModelSpec.speechRate）
+        val samples = TimeStretcher.stretch(audio.samples, rate)
+        val audioMs = samples.size * 1000L / audio.sampleRate.coerceAtLeast(1)
         val rtf = if (audioMs > 0) synthMs.toDouble() / audioMs else 0.0
         Logger.i(
             TAG,
             "synth id=${spec?.id} textLength=${next.text.length} synthMs=$synthMs audioMs=$audioMs " +
-                "rtf=${String.format(Locale.US, "%.3f", rtf)} sampleRate=${audio.sampleRate}",
+                "rtf=${String.format(Locale.US, "%.3f", rtf)} sampleRate=${audio.sampleRate} " +
+                "rate=$rate naturalMs=${audio.samples.size * 1000L / audio.sampleRate.coerceAtLeast(1)}",
         )
 
         if (epoch != stopEpoch.get()) {
@@ -233,7 +237,7 @@ internal class LocalTtsVoice(
             return
         }
         synchronized(queueLock) {
-            playQueue.addLast(Rendered(audio.samples, audio.sampleRate, next.onDone))
+            playQueue.addLast(Rendered(samples, audio.sampleRate, next.onDone))
             queueLock.notifyAll()
         }
     }

@@ -51,6 +51,15 @@ internal data class LocalTtsModelSpec(
     val ruleFsts: List<String> = emptyList(),
     /** 语速：lengthScale <1 更快，1.0 是引擎默认（VITS/MATCHA/KOKORO）。 */
     val lengthScale: Float = 1.0f,
+
+    /**
+     * 播放语速倍率：模型按自然速合成（[lengthScale] = 1），播放前用 [TimeStretcher]
+     * 保音高变速到这个倍率。
+     *
+     * 为什么不用 [lengthScale] 提速：那是让模型把音素压短，实测压到 1.4x 就开始吞音连读
+     * （`苹果居中` → "苹果粥"）。而 `AudioTrack` 自带的变速是纯重采样会变调。
+     */
+    val speechRate: Float = 1.0f,
     /** ZIPVOICE 零样本克隆用的参考音色。 */
     val referenceWav: String? = null,
     val referenceText: String? = null,
@@ -124,12 +133,11 @@ internal object LocalTtsModels {
         lexicon = "lexicon.txt",
         dataDir = "espeak-ng-data",
         ruleFsts = listOf("date-zh.fst", "number-zh.fst"),
-        // 与系统 TTS 现有 1.4× 语速等效
-        // 语速 1.2x。实测（同一模型离线回听 + SenseVoice）：
-        // 自然速约 4.4 字/秒（≈265 字/分），1.2x ≈ 320 字/分仍清晰；
-        // 1.4x ≈ 370 字/分 起模型开始吞音连读（`苹果居中` → "苹果粥"、`清爽水润，甜而多汁` → "清爽润甜汁"），
-        // 听感就是「段间轻微缺字」。AudioTrack 的变速是纯重采样会变调，保音高得换 MediaPlayer，暂不做。
-        lengthScale = 1f / 1.2f,
+        // 模型按自然速合成（自然速 ≈4.4 字/秒 ≈265 字/分），语速由 speechRate 在播放前做保音高变速。
+        // 实测：模型自己压时长到 1.2x 起就开始吞音（`清爽水润，甜而多汁` → "甜多汁"），
+        // 而「自然速合成 + 保音高变速到 1.2x」的回听与自然速一致（ffmpeg atempo 参考实现验证过）。
+        lengthScale = 1.0f,
+        speechRate = 1.2f,
     )
 
     /** 中文女声从 sid=3（`zf_001`）起。 */
